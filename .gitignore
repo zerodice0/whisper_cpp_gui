@@ -1,0 +1,54 @@
+# Node.js
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env
+.env.*
+
+# Vite
+.vite/
+
+# Tauri
+/src-tauri/target/
+/src-tauri/.cargo/
+/src-tauri/Cargo.lock
+/src-tauri/whisper-gui.d
+/src-tauri/Whisper\ GUI
+
+# Rust
+**/target/
+**/*.rs.bk
+Cargo.lock
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# 기타 에디터/툴
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# 로그/캐시
+*.log
+.cache/
+*.tmp
+
+# 테스트/커버리지
+coverage/
+*.lcov
+
+# 빌드 산출물
+build/
+out/
+
+# 기타
+.claude/
