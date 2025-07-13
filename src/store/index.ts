@@ -17,6 +17,10 @@ interface SystemStatus {
 
 interface AppStore extends TranscriptionState {
   systemStatus: SystemStatus;
+  activeTab: string;
+  
+  // Navigation actions
+  setActiveTab: (tab: string) => void;
   
   // Transcription actions
   setCurrentFile: (file: string | null) => void;
@@ -51,6 +55,11 @@ export const useAppStore = create<AppStore>()(
   immer((set) => ({
     ...initialState,
     systemStatus: initialSystemStatus,
+    activeTab: 'dashboard',
+    
+    setActiveTab: (tab) => set((state) => {
+      state.activeTab = tab;
+    }),
     
     setCurrentFile: (file) => set((state) => {
       state.currentFile = file;

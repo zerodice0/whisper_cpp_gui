@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::collections::HashMap;
 use tauri::Manager;
 use crate::models::*;
 use crate::services::whisper_installer::WhisperInstaller;
@@ -178,6 +179,122 @@ impl WhisperService {
         tokio::fs::write(output_path, fcpxml_content).await?;
         Ok(format!("FCPXML exported to: {}", output_path))
     }
+
+    pub async fn get_whisper_options(&self) -> anyhow::Result<WhisperOptions> {
+        use tokio::process::Command as TokioCommand;
+        
+        let main_binary = self.whisper_repo_path.join("build").join("bin").join("main");
+        let fallback_binary = self.whisper_repo_path.join("build").join("main");
+        
+        let binary_path = if main_binary.exists() {
+            &main_binary
+        } else if fallback_binary.exists() {
+            &fallback_binary
+        } else {
+            return Err(anyhow::anyhow!("Whisper binary not found"));
+        };
+
+        let output = TokioCommand::new(binary_path)
+            .arg("--help")
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Failed to get whisper help"));
+        }
+
+        let help_text = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_whisper_help(&help_text))
+    }
+
+    pub async fn start_transcription_with_options(
+        &self,
+        config: &WhisperConfig,
+        app_handle: tauri::AppHandle
+    ) -> anyhow::Result<()> {
+        use tokio::process::Command as TokioCommand;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use std::process::Stdio;
+        
+        let model_path = self.models_path.join(format!("ggml-{}.bin", config.model));
+        
+        if !model_path.exists() {
+            return Err(anyhow::anyhow!("Model not found: {}", config.model));
+        }
+
+        let main_binary = self.whisper_repo_path.join("build").join("bin").join("main");
+        let fallback_binary = self.whisper_repo_path.join("build").join("main");
+        
+        let binary_path = if main_binary.exists() {
+            &main_binary
+        } else if fallback_binary.exists() {
+            &fallback_binary
+        } else {
+            return Err(anyhow::anyhow!("Whisper binary not found"));
+        };
+
+        let mut args = vec![
+            "-m".to_string(), 
+            model_path.to_string_lossy().to_string(),
+            "-f".to_string(), 
+            config.input_file.clone()
+        ];
+
+        for (key, value) in &config.options {
+            if value.is_empty() {
+                args.push(format!("--{}", key));
+            } else {
+                args.push(format!("--{}", key));
+                args.push(value.clone());
+            }
+        }
+
+        let mut cmd = TokioCommand::new(binary_path)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let stdout = cmd.stdout.take().unwrap();
+        let stderr = cmd.stderr.take().unwrap();
+
+        let app_handle_clone = app_handle.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                app_handle_clone.emit_all("transcription-log", &line).ok();
+                if let Some(progress) = parse_whisper_output_line(&line) {
+                    app_handle_clone.emit_all("transcription-progress", &progress).ok();
+                }
+            }
+        });
+
+        let app_handle_stderr = app_handle.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                app_handle_stderr.emit_all("transcription-log", &line).ok();
+            }
+        });
+
+        let app_handle_final = app_handle;
+        tokio::spawn(async move {
+            match cmd.wait().await {
+                Ok(status) => {
+                    if status.success() {
+                        app_handle_final.emit_all("transcription-complete", "Success").ok();
+                    } else {
+                        app_handle_final.emit_all("transcription-error", "Process failed").ok();
+                    }
+                }
+                Err(e) => {
+                    app_handle_final.emit_all("transcription-error", &e.to_string()).ok();
+                }
+            }
+        });
+
+        Ok(())
+    }
 }
 
 fn convert_to_srt(transcription: &str) -> String {
@@ -251,6 +368,127 @@ fn convert_to_fcpxml(transcription: &str) -> String {
 </fcpxml>"#);
     
     fcpxml_content
+}
+
+pub fn parse_whisper_help(help_text: &str) -> WhisperOptions {
+    let mut options = Vec::new();
+    
+    let lines: Vec<&str> = help_text.lines().collect();
+    
+    for line in lines {
+        let trimmed = line.trim();
+        
+        if trimmed.starts_with("-") && trimmed.contains(" ") {
+            if let Some(option) = parse_option_line(trimmed) {
+                options.push(option);
+            }
+        }
+    }
+    
+    add_default_options(&mut options);
+    
+    WhisperOptions { options }
+}
+
+fn parse_option_line(line: &str) -> Option<WhisperOption> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+    
+    let option_part = parts[0];
+    let description = if parts.len() > 1 {
+        parts[1..].join(" ")
+    } else {
+        "".to_string()
+    };
+    
+    let (name, short_name) = if option_part.contains(",") {
+        let opts: Vec<&str> = option_part.split(",").map(|s| s.trim()).collect();
+        let long = opts.iter().find(|opt| opt.starts_with("--"));
+        let short = opts.iter().find(|opt| opt.starts_with("-") && !opt.starts_with("--"));
+        
+        if let Some(long_opt) = long {
+            let name = long_opt.trim_start_matches("--").to_string();
+            let short_name = short.map(|s| s.trim_start_matches("-").to_string());
+            (name, short_name)
+        } else {
+            return None;
+        }
+    } else if option_part.starts_with("--") {
+        (option_part.trim_start_matches("--").to_string(), None)
+    } else if option_part.starts_with("-") && option_part.len() > 1 {
+        let name = option_part.trim_start_matches("-").to_string();
+        (name.clone(), Some(name))
+    } else {
+        return None;
+    };
+    
+    let option_type = if description.contains("[") || description.contains("value") || description.contains("string") {
+        WhisperOptionType::String
+    } else if description.contains("number") || description.contains("int") {
+        WhisperOptionType::Integer
+    } else if description.contains("float") || description.contains("seconds") {
+        WhisperOptionType::Float
+    } else {
+        WhisperOptionType::Flag
+    };
+    
+    Some(WhisperOption {
+        name,
+        short_name,
+        description,
+        option_type,
+        default_value: None,
+        possible_values: None,
+    })
+}
+
+fn add_default_options(options: &mut Vec<WhisperOption>) {
+    let common_options = vec![
+        WhisperOption {
+            name: "output-txt".to_string(),
+            short_name: None,
+            description: "Generate text output".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "output-srt".to_string(),
+            short_name: None,
+            description: "Generate SRT subtitle output".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "language".to_string(),
+            short_name: Some("l".to_string()),
+            description: "Spoken language (auto for auto-detection)".to_string(),
+            option_type: WhisperOptionType::String,
+            default_value: Some("auto".to_string()),
+            possible_values: Some(vec![
+                "auto".to_string(), "en".to_string(), "ko".to_string(), 
+                "ja".to_string(), "zh".to_string(), "es".to_string(),
+                "fr".to_string(), "de".to_string(), "it".to_string(),
+            ]),
+        },
+        WhisperOption {
+            name: "threads".to_string(),
+            short_name: Some("t".to_string()),
+            description: "Number of threads to use during computation".to_string(),
+            option_type: WhisperOptionType::Integer,
+            default_value: Some("4".to_string()),
+            possible_values: None,
+        },
+    ];
+    
+    for default_option in common_options {
+        if !options.iter().any(|opt| opt.name == default_option.name) {
+            options.push(default_option);
+        }
+    }
 }
 
 pub fn parse_whisper_output_line(line: &str) -> Option<ProgressInfo> {

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/api/dialog';
 import { listen } from '@tauri-apps/api/event';
-import { whisperApi, ProgressInfo } from '../services/api';
+import { whisperApi, ProgressInfo, WhisperOptions, WhisperConfig } from '../services/api';
+import { OptionsForm } from './OptionsForm';
 
 interface TranscriptionState {
   currentFile: string | null;
@@ -23,6 +24,8 @@ export const Transcription: React.FC = React.memo(() => {
   
   const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [whisperOptions, setWhisperOptions] = useState<WhisperOptions | null>(null);
+  const [config, setConfig] = useState<Partial<WhisperConfig>>({});
 
   const loadModels = async () => {
     try {
@@ -33,6 +36,15 @@ export const Transcription: React.FC = React.memo(() => {
       }
     } catch (error) {
       console.error('Failed to load models:', error);
+    }
+  };
+
+  const loadWhisperOptions = async () => {
+    try {
+      const options = await whisperApi.getWhisperOptions();
+      setWhisperOptions(options);
+    } catch (error) {
+      console.error('Failed to load whisper options:', error);
     }
   };
 
@@ -69,7 +81,13 @@ export const Transcription: React.FC = React.memo(() => {
     }));
 
     try {
-      await whisperApi.startTranscription(state.currentFile, selectedModel);
+      const whisperConfig: WhisperConfig = {
+        model: selectedModel,
+        input_file: state.currentFile,
+        options: config.options || {}
+      };
+      
+      await whisperApi.startTranscriptionWithOptions(whisperConfig);
     } catch (error) {
       setState(prev => ({ 
         ...prev, 
@@ -142,6 +160,7 @@ export const Transcription: React.FC = React.memo(() => {
 
     setupListeners();
     loadModels();
+    loadWhisperOptions();
   }, []);
 
   const getFileSize = (filePath: string) => {
@@ -216,6 +235,13 @@ export const Transcription: React.FC = React.memo(() => {
           </select>
         )}
       </div>
+
+      {/* whisper.cpp 옵션 */}
+      <OptionsForm
+        options={whisperOptions}
+        onConfigChange={setConfig}
+        disabled={state.status === 'running'}
+      />
 
       {/* 변환 실행 */}
       <div className="bg-white p-6 rounded-lg shadow">

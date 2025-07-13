@@ -150,3 +150,24 @@ pub async fn export_to_fcpxml(
     service.export_to_fcpxml(&transcription, &output_path).await
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn get_whisper_options(
+    service: State<'_, WhisperServiceState>
+) -> Result<WhisperOptions, String> {
+    let service = service.lock().await;
+    service.get_whisper_options().await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_transcription_with_options(
+    config: WhisperConfig,
+    app_handle: AppHandle,
+    service: State<'_, WhisperServiceState>
+) -> Result<String, String> {
+    let service = service.lock().await;
+    service.start_transcription_with_options(&config, app_handle).await
+        .map_err(|e| e.to_string())?;
+    Ok("Transcription started with options".to_string())
+}

@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { Setup } from './components/Setup';
@@ -6,12 +5,13 @@ import { Management } from './components/Management';
 import { Transcription } from './components/Transcription';
 import { Output } from './components/Output';
 import { Export } from './components/Export';
+import { useAppStore } from './store';
 
 function App() {
-  const [activeItem, setActiveItem] = useState('dashboard');
+  const { activeTab, setActiveTab } = useAppStore();
 
   const renderContent = () => {
-    switch (activeItem) {
+    switch (activeTab) {
       case 'dashboard':
         return <Dashboard />;
       case 'setup':
@@ -30,7 +30,7 @@ function App() {
   };
 
   return (
-    <Layout activeItem={activeItem} onItemClick={setActiveItem}>
+    <Layout activeItem={activeTab} onItemClick={setActiveTab}>
       {renderContent()}
     </Layout>
   );

@@ -6,6 +6,25 @@ export interface ProgressInfo {
   message: string;
 }
 
+export interface WhisperOption {
+  name: string;
+  short_name?: string;
+  description: string;
+  option_type: 'Flag' | 'String' | 'Integer' | 'Float';
+  default_value?: string;
+  possible_values?: string[];
+}
+
+export interface WhisperOptions {
+  options: WhisperOption[];
+}
+
+export interface WhisperConfig {
+  model: string;
+  input_file: string;
+  options: Record<string, string>;
+}
+
 export const whisperApi = {
   async checkInstallation(): Promise<boolean> {
     return invoke('check_whisper_installation');
@@ -49,5 +68,13 @@ export const whisperApi = {
 
   async checkSystemRequirements(): Promise<string> {
     return invoke('check_system_requirements');
+  },
+
+  async getWhisperOptions(): Promise<WhisperOptions> {
+    return invoke('get_whisper_options');
+  },
+
+  async startTranscriptionWithOptions(config: WhisperConfig): Promise<string> {
+    return invoke('start_transcription_with_options', { config });
   },
 };

@@ -11,7 +11,8 @@ export const Dashboard: React.FC = React.memo(() => {
     status, 
     progress,
     setWhisperInstalled,
-    setModelsCount 
+    setModelsCount,
+    setActiveTab
   } = useAppStore();
 
   const loadSystemStatus = async () => {
@@ -69,7 +70,7 @@ export const Dashboard: React.FC = React.memo(() => {
           </div>
           <div className="mt-4">
             <button 
-              onClick={() => window.location.hash = '#setup'}
+              onClick={() => setActiveTab('setup')}
               className={`px-4 py-2 rounded-md text-sm text-white ${
                 systemStatus.whisperInstalled 
                   ? 'bg-green-600 hover:bg-green-700' 
@@ -86,7 +87,7 @@ export const Dashboard: React.FC = React.memo(() => {
           <p className="text-sm text-gray-600">{systemStatus.modelsCount} {t('dashboard.modelsAvailable').toLowerCase()}</p>
           <div className="mt-4">
             <button 
-              onClick={() => window.location.hash = '#management'}
+              onClick={() => setActiveTab('management')}
               className="bg-green-600 text-white px-4 py-2 rounded-md text-sm hover:bg-green-700"
             >
               {t('dashboard.downloadModel')}
@@ -101,7 +102,7 @@ export const Dashboard: React.FC = React.memo(() => {
           </p>
           <div className="mt-4">
             <button 
-              onClick={() => window.location.hash = '#transcription'}
+              onClick={() => setActiveTab('transcription')}
               className="bg-purple-600 text-white px-4 py-2 rounded-md text-sm hover:bg-purple-700"
             >
               {t('dashboard.startTranscription')}

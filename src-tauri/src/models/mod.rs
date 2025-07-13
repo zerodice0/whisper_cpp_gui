@@ -46,3 +46,33 @@ pub struct ProgressInfo {
     pub current_time: Option<f32>,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WhisperOptionType {
+    Flag,           // --flag
+    String,         // --option value
+    Integer,        // --threads 4
+    Float,          // --duration 10.5
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhisperOption {
+    pub name: String,
+    pub short_name: Option<String>,
+    pub description: String,
+    pub option_type: WhisperOptionType,
+    pub default_value: Option<String>,
+    pub possible_values: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhisperOptions {
+    pub options: Vec<WhisperOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhisperConfig {
+    pub model: String,
+    pub input_file: String,
+    pub options: std::collections::HashMap<String, String>,
+}

@@ -30,7 +30,9 @@ async fn main() {
             start_transcription,
             read_transcription_result,
             export_to_srt,
-            export_to_fcpxml
+            export_to_fcpxml,
+            get_whisper_options,
+            start_transcription_with_options
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
