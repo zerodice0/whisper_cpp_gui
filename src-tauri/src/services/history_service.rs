@@ -232,8 +232,8 @@ impl HistoryService {
             .join(format!("result.{}", format))
     }
     
-    /// 히스토리 디렉토리 경로를 반환합니다
-    fn get_history_directory(&self, history_id: &str) -> PathBuf {
+    /// 히스토리 디렉토리 경로를 반환합니다 (public)
+    pub fn get_history_directory(&self, history_id: &str) -> PathBuf {
         self.results_dir.join(history_id)
     }
     

@@ -501,7 +501,7 @@ impl WhisperService {
             .to_string();
         
         let history = self.history_service.create_history_entry(
-            original_file_name,
+            original_file_name.clone(),
             input_path.clone(),
             config.model.clone(),
             config.options.clone(),
@@ -533,6 +533,10 @@ impl WhisperService {
             return Err(anyhow::anyhow!("Whisper binary not found"));
         };
 
+        // 히스토리 결과 디렉토리 생성
+        let results_dir = self.history_service.get_history_directory(&history_id);
+        tokio::fs::create_dir_all(&results_dir).await?;
+        
         let mut args = vec![
             "-m".to_string(), 
             model_path.to_string_lossy().to_string(),
@@ -540,13 +544,29 @@ impl WhisperService {
             config.input_file.clone()
         ];
 
+        // 출력 경로를 히스토리 디렉토리로 설정
+        let output_file_base = results_dir.join(&original_file_name);
+        
+        // 출력 형식별로 경로 지정
         for (key, value) in &config.options {
-            if value.is_empty() {
+            if key.starts_with("output-") {
+                let format = key.strip_prefix("output-").unwrap();
+                let output_path = format!("{}.{}", output_file_base.to_string_lossy(), format);
+                args.push(format!("--{}", key));
+                args.push(output_path);
+            } else if value.is_empty() {
                 args.push(format!("--{}", key));
             } else {
                 args.push(format!("--{}", key));
                 args.push(value.clone());
             }
+        }
+        
+        // 기본 SRT 출력을 위한 설정 (사용자가 지정하지 않았을 경우)
+        if !config.options.contains_key("output-srt") {
+            let srt_output_path = format!("{}.srt", output_file_base.to_string_lossy());
+            args.push("--output-srt".to_string());
+            args.push(srt_output_path);
         }
 
         let mut cmd = TokioCommand::new(binary_path)
@@ -645,12 +665,14 @@ impl WhisperService {
         input_path: &PathBuf,
         options: &std::collections::HashMap<String, String>,
     ) -> anyhow::Result<()> {
-        let input_stem = input_path
-            .file_stem()
+        let input_file_name = input_path
+            .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("result");
         
-        let input_dir = input_path.parent().unwrap_or(input_path);
+        // 히스토리 디렉토리에서 결과 파일들 찾기
+        let results_dir = history_service.get_history_directory(history_id);
+        let output_file_base = results_dir.join(input_file_name);
         
         let mut result_files = Vec::new();
         
@@ -664,22 +686,30 @@ impl WhisperService {
             ("output-lrc", "lrc"),
         ];
         
+        eprintln!("Looking for result files in history directory: {:?}", results_dir);
+        eprintln!("Output file base: {:?}", output_file_base);
+        
         for (option_key, format) in output_formats {
-            // 해당 옵션이 활성화되어 있거나, 기본 txt 출력인 경우
-            if options.contains_key(option_key) || format == "txt" {
-                let result_file_path = input_dir.join(format!("{}.{}", input_stem, format));
+            // 해당 옵션이 활성화되어 있거나, 기본 srt 출력인 경우 
+            if options.contains_key(option_key) || format == "srt" {
+                let result_file_path = PathBuf::from(format!("{}.{}", output_file_base.to_string_lossy(), format));
+                
+                eprintln!("Checking for result file: {:?}", result_file_path);
                 
                 if result_file_path.exists() {
+                    eprintln!("Found result file: {:?}", result_file_path);
                     result_files.push((result_file_path, format.to_string()));
+                } else {
+                    eprintln!("Result file not found: {:?}", result_file_path);
                 }
             }
         }
         
         if result_files.is_empty() {
-            return Err(anyhow::anyhow!("No result files found"));
+            return Err(anyhow::anyhow!("No result files found in history directory"));
         }
         
-        // 결과 파일들을 히스토리에 저장
+        // 결과 파일들을 히스토리에 등록
         history_service.add_transcription_results(history_id, result_files).await?;
         
         Ok(())
