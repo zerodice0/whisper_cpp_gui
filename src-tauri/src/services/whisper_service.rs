@@ -2,12 +2,14 @@ use std::path::PathBuf;
 use tauri::Manager;
 use crate::models::*;
 use crate::services::whisper_installer::WhisperInstaller;
+use crate::services::history_service::HistoryService;
 
 pub struct WhisperService {
     pub whisper_repo_path: PathBuf,
     pub whisper_binary_path: PathBuf,
     pub models_path: PathBuf,
     installer: WhisperInstaller,
+    history_service: HistoryService,
 }
 
 impl WhisperService {
@@ -24,6 +26,7 @@ impl WhisperService {
             whisper_binary_path,
             models_path: models_path.clone(),
             installer: WhisperInstaller::new(whisper_repo_path, models_path),
+            history_service: HistoryService::new(),
         }
     }
 
@@ -271,7 +274,7 @@ impl WhisperService {
         &self,
         config: &WhisperConfig,
         app_handle: tauri::AppHandle
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<String> {
         use tokio::process::Command as TokioCommand;
         use tokio::io::{AsyncBufReadExt, BufReader};
         use std::process::Stdio;
@@ -281,6 +284,23 @@ impl WhisperService {
         if !model_path.exists() {
             return Err(anyhow::anyhow!("Model not found: {}", config.model));
         }
+
+        // 히스토리 항목 생성
+        let input_path = PathBuf::from(&config.input_file);
+        let original_file_name = input_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        
+        let history = self.history_service.create_history_entry(
+            original_file_name,
+            input_path.clone(),
+            config.model.clone(),
+            config.options.clone(),
+        ).await?;
+        
+        let history_id = history.id.clone();
 
         // whisper-cli 바이너리 찾기 (최신 whisper.cpp에서 권장)
         let whisper_cli_binary = self.whisper_repo_path.join("build").join("bin").join("whisper-cli");
@@ -298,6 +318,11 @@ impl WhisperService {
         } else if fallback_binary.exists() {
             &fallback_binary
         } else {
+            // 히스토리 실패로 마크
+            self.history_service.mark_history_failed(
+                &history_id, 
+                "Whisper binary not found".to_string()
+            ).await.ok();
             return Err(anyhow::anyhow!("Whisper binary not found"));
         };
 
@@ -321,11 +346,22 @@ impl WhisperService {
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .map_err(|e| {
+                // 프로세스 시작 실패 시 히스토리 실패로 마크
+                let history_service = self.history_service.clone();
+                let history_id = history_id.clone();
+                let error_message = e.to_string();
+                tokio::spawn(async move {
+                    history_service.mark_history_failed(&history_id, error_message).await.ok();
+                });
+                e
+            })?;
 
         let stdout = cmd.stdout.take().unwrap();
         let stderr = cmd.stderr.take().unwrap();
 
+        // stdout 처리
         let app_handle_clone = app_handle.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
@@ -337,6 +373,7 @@ impl WhisperService {
             }
         });
 
+        // stderr 처리
         let app_handle_stderr = app_handle.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
@@ -345,22 +382,99 @@ impl WhisperService {
             }
         });
 
+        // 프로세스 완료 처리
         let app_handle_final = app_handle;
+        let history_service = self.history_service.clone();
+        let history_id_final = history_id.clone();
+        let input_path_final = input_path.clone();
+        let config_options = config.options.clone();
+        
         tokio::spawn(async move {
             match cmd.wait().await {
                 Ok(status) => {
                     if status.success() {
-                        app_handle_final.emit_all("transcription-complete", "Success").ok();
+                        // 결과 파일들 수집 및 히스토리에 저장
+                        match Self::collect_and_save_result_files(
+                            &history_service,
+                            &history_id_final,
+                            &input_path_final,
+                            &config_options,
+                        ).await {
+                            Ok(_) => {
+                                app_handle_final.emit_all("transcription-complete", &history_id_final).ok();
+                            }
+                            Err(e) => {
+                                history_service.mark_history_failed(
+                                    &history_id_final, 
+                                    format!("Failed to save results: {}", e)
+                                ).await.ok();
+                                app_handle_final.emit_all("transcription-error", &e.to_string()).ok();
+                            }
+                        }
                     } else {
+                        history_service.mark_history_failed(
+                            &history_id_final, 
+                            "Transcription process failed".to_string()
+                        ).await.ok();
                         app_handle_final.emit_all("transcription-error", "Process failed").ok();
                     }
                 }
                 Err(e) => {
+                    history_service.mark_history_failed(
+                        &history_id_final, 
+                        e.to_string()
+                    ).await.ok();
                     app_handle_final.emit_all("transcription-error", &e.to_string()).ok();
                 }
             }
         });
 
+        Ok(history_id)
+    }
+    
+    async fn collect_and_save_result_files(
+        history_service: &HistoryService,
+        history_id: &str,
+        input_path: &PathBuf,
+        options: &std::collections::HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        let input_stem = input_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("result");
+        
+        let input_dir = input_path.parent().unwrap_or(input_path);
+        
+        let mut result_files = Vec::new();
+        
+        // 생성될 수 있는 출력 형식들 체크
+        let output_formats = vec![
+            ("output-txt", "txt"),
+            ("output-srt", "srt"),
+            ("output-vtt", "vtt"),
+            ("output-csv", "csv"),
+            ("output-json", "json"),
+            ("output-lrc", "lrc"),
+        ];
+        
+        for (option_key, format) in output_formats {
+            // 해당 옵션이 활성화되어 있거나, 기본 txt 출력인 경우
+            if options.contains_key(option_key) || format == "txt" {
+                let result_file_path = input_dir.join(format!("{}.{}", input_stem, format));
+                
+                if result_file_path.exists() {
+                    result_files.push((result_file_path, format.to_string()));
+                }
+            }
+        }
+        
+        if result_files.is_empty() {
+            return Err(anyhow::anyhow!("No result files found"));
+        }
+        
+        // 결과 파일들을 히스토리에 저장
+        history_service.add_transcription_results(history_id, result_files).await?;
+        
         Ok(())
     }
 }

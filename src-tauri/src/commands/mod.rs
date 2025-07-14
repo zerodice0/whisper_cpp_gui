@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 type WhisperServiceState = Arc<Mutex<WhisperService>>;
+type HistoryServiceState = Arc<Mutex<HistoryService>>;
 
 #[tauri::command]
 pub async fn greet(name: &str) -> Result<String, String> {
@@ -167,9 +168,9 @@ pub async fn start_transcription_with_options(
     service: State<'_, WhisperServiceState>
 ) -> Result<String, String> {
     let service = service.lock().await;
-    service.start_transcription_with_options(&config, app_handle).await
+    let history_id = service.start_transcription_with_options(&config, app_handle).await
         .map_err(|e| e.to_string())?;
-    Ok("Transcription started with options".to_string())
+    Ok(history_id)
 }
 
 #[tauri::command]
@@ -193,4 +194,91 @@ pub async fn delete_model(
     service.delete_model(&model_name).await
         .map_err(|e| e.to_string())?;
     Ok(format!("Model {} deleted successfully", model_name))
+}
+
+// ===== 히스토리 관련 명령들 =====
+
+#[tauri::command]
+pub async fn list_transcription_history(
+    query: HistoryQuery,
+    history_service: State<'_, HistoryServiceState>
+) -> Result<HistoryListResponse, String> {
+    let service = history_service.lock().await;
+    service.list_history(query).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_transcription_history(
+    history_id: String,
+    history_service: State<'_, HistoryServiceState>
+) -> Result<TranscriptionHistory, String> {
+    let service = history_service.lock().await;
+    service.get_history(&history_id).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_transcription_history(
+    history_id: String,
+    history_service: State<'_, HistoryServiceState>
+) -> Result<String, String> {
+    let service = history_service.lock().await;
+    service.delete_history(&history_id).await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("History {} deleted successfully", history_id))
+}
+
+#[tauri::command]
+pub async fn update_history_tags(
+    history_id: String,
+    tags: Vec<String>,
+    history_service: State<'_, HistoryServiceState>
+) -> Result<TranscriptionHistory, String> {
+    let service = history_service.lock().await;
+    service.update_history_tags(&history_id, tags).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_history_notes(
+    history_id: String,
+    notes: Option<String>,
+    history_service: State<'_, HistoryServiceState>
+) -> Result<TranscriptionHistory, String> {
+    let service = history_service.lock().await;
+    service.update_history_notes(&history_id, notes).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn download_result_file(
+    history_id: String,
+    format: String,
+    save_path: String,
+    history_service: State<'_, HistoryServiceState>
+) -> Result<String, String> {
+    let service = history_service.lock().await;
+    let source_path = service.get_result_file_path(&history_id, &format);
+    
+    if !source_path.exists() {
+        return Err(format!("Result file not found: {}", format));
+    }
+    
+    tokio::fs::copy(&source_path, &save_path).await
+        .map_err(|e| format!("Failed to copy file: {}", e))?;
+    
+    Ok(format!("File downloaded to: {}", save_path))
+}
+
+#[tauri::command]
+pub async fn get_result_file_info(
+    history_id: String,
+    history_service: State<'_, HistoryServiceState>
+) -> Result<Vec<TranscriptionResult>, String> {
+    let service = history_service.lock().await;
+    let history = service.get_history(&history_id).await
+        .map_err(|e| e.to_string())?;
+    
+    Ok(history.results)
 }
