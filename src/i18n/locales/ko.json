@@ -75,6 +75,9 @@
     "downloadButton": "다운로드",
     "downloading": "다운로드 중...",
     "noModelsDownloaded": "아직 다운로드된 모델이 없습니다",
+    "noModelsAvailable": "사용 가능한 모델이 없습니다",
+    "noModelsError": "모델 목록을 불러올 수 없습니다",
+    "loadError": "모델 목록 로드 오류",
     "modelSizes": {
       "tiny": "39 MB",
       "tiny.en": "39 MB", 

@@ -4,6 +4,14 @@ import { listen } from '@tauri-apps/api/event';
 import { whisperApi, DownloadProgress } from '../services/api';
 import { DeleteModelModal } from './DeleteModelModal';
 
+// 전역 상태를 위한 간단한 캐시
+const modelCache = {
+  available: [] as string[],
+  downloaded: [] as string[],
+  lastUpdated: 0,
+  CACHE_DURATION: 30000, // 30초
+};
+
 export const Management: React.FC = React.memo(() => {
   const { t } = useTranslation();
   const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -13,6 +21,8 @@ export const Management: React.FC = React.memo(() => {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [modelToDelete, setModelToDelete] = useState<string>('');
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const getModelSize = (model: string) => {
     return t(`management.modelSizes.${model}`, { defaultValue: t('common.unknownSize') });
@@ -22,17 +32,72 @@ export const Management: React.FC = React.memo(() => {
     return t(`management.modelDescriptions.${model}`, { defaultValue: t('common.noDescription') });
   };
 
-  const loadModels = async () => {
-    try {
-      const [available, downloaded] = await Promise.all([
-        whisperApi.listAvailableModels(),
-        whisperApi.listDownloadedModels()
-      ]);
-      setAvailableModels(available);
-      setDownloadedModels(downloaded);
-    } catch (error) {
-      console.error('Failed to load models:', error);
+  const loadModels = async (force = false) => {
+    setIsLoading(true);
+    setLoadError(null);
+    
+    // 캐시된 데이터가 유효하다면 사용
+    const now = Date.now();
+    if (!force && modelCache.lastUpdated > 0 && 
+        (now - modelCache.lastUpdated) < modelCache.CACHE_DURATION &&
+        modelCache.available.length > 0) {
+      console.log('Using cached model data');
+      setAvailableModels(modelCache.available);
+      setDownloadedModels(modelCache.downloaded);
+      setIsLoading(false);
+      return;
     }
+
+    // 재시도 로직 구현
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Loading models (attempt ${attempt}/${maxRetries})`);
+        
+        const [available, downloaded] = await Promise.all([
+          whisperApi.listAvailableModels(),
+          whisperApi.listDownloadedModels()
+        ]);
+        
+        // 최소한의 검증
+        if (available.length === 0) {
+          throw new Error('Available models list is empty');
+        }
+        
+        // 성공 시 캐시 업데이트
+        modelCache.available = available;
+        modelCache.downloaded = downloaded;
+        modelCache.lastUpdated = now;
+        
+        setAvailableModels(available);
+        setDownloadedModels(downloaded);
+        setIsLoading(false);
+        return;
+        
+      } catch (error) {
+        lastError = error as Error;
+        console.error(`Failed to load models (attempt ${attempt}):`, error);
+        
+        // 마지막 시도가 아니라면 잠시 대기
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+    
+    // 모든 시도가 실패했을 때
+    setLoadError(lastError?.message || 'Failed to load models after multiple attempts');
+    
+    // 캐시된 데이터라도 있다면 사용
+    if (modelCache.available.length > 0) {
+      console.log('Using stale cached data as fallback');
+      setAvailableModels(modelCache.available);
+      setDownloadedModels(modelCache.downloaded);
+    }
+    
+    setIsLoading(false);
   };
 
   const downloadModel = async (modelName: string) => {
@@ -87,6 +152,13 @@ export const Management: React.FC = React.memo(() => {
   };
 
   useEffect(() => {
+    // 컴포넌트 마운트 시 캐시된 데이터가 있으면 즉시 표시
+    if (modelCache.available.length > 0) {
+      setAvailableModels(modelCache.available);
+      setDownloadedModels(modelCache.downloaded);
+    }
+    
+    // 그 다음 최신 데이터를 로드 (캐시 유효성 검사 포함)
     loadModels();
     
     // 다운로드 진행률 이벤트 리스너 설정
@@ -105,8 +177,8 @@ export const Management: React.FC = React.memo(() => {
             newSet.delete(progress.model_name);
             return newSet;
           });
-          // 모델 목록 새로고침
-          loadModels();
+          // 모델 목록 새로고침 (캐시 무효화하여 강제 재로드)
+          setTimeout(() => loadModels(true), 1000);
         } else if (progress.status === 'Failed') {
           setDownloadingModels(prev => {
             const newSet = new Set(prev);
@@ -171,10 +243,49 @@ export const Management: React.FC = React.memo(() => {
 
       {/* 사용 가능한 모델 */}
       <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">{t('management.availableModels')}</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-medium text-gray-900">{t('management.availableModels')}</h3>
+          {isLoading && (
+            <div className="flex items-center text-sm text-gray-500">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
+              {t('common.loading')}
+            </div>
+          )}
+          {loadError && (
+            <button
+              onClick={() => loadModels(true)}
+              className="text-sm px-3 py-1 text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100"
+            >
+              {t('common.retry')}
+            </button>
+          )}
+        </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {availableModels.map((model) => {
+        {loadError && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-red-700 text-sm">
+              {t('management.loadError')}: {loadError}
+            </p>
+          </div>
+        )}
+        
+        {availableModels.length === 0 && !isLoading ? (
+          <div className="text-center py-8">
+            <p className="text-gray-500 mb-2">
+              {loadError ? t('management.noModelsError') : t('management.noModelsAvailable')}
+            </p>
+            {loadError && (
+              <button
+                onClick={() => loadModels(true)}
+                className="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100"
+              >
+                {t('common.retry')}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {availableModels.map((model) => {
             const isDownloaded = downloadedModels.includes(model);
             const isDownloading = downloadingModels.has(model);
             const progress = downloadProgress[model];

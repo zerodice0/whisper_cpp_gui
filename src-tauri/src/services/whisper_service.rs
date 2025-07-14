@@ -46,22 +46,44 @@ impl WhisperService {
         // whisper.cpp의 download-ggml-model.sh 스크립트에서 모델 목록을 파싱
         let script_path = self.whisper_repo_path.join("models").join("download-ggml-model.sh");
         
-        if script_path.exists() {
-            match self.parse_models_from_script(&script_path).await {
-                Ok(models) => {
-                    eprintln!("Loaded {} models from download script", models.len());
-                    return Ok(models);
+        // 여러 번 시도해서 파싱 안정성 향상
+        let mut last_error = None;
+        for attempt in 1..=3 {
+            if script_path.exists() {
+                match self.parse_models_from_script(&script_path).await {
+                    Ok(models) => {
+                        if !models.is_empty() {
+                            eprintln!("Successfully loaded {} models from download script (attempt {})", models.len(), attempt);
+                            return Ok(models);
+                        } else {
+                            eprintln!("Empty model list from script (attempt {}), retrying...", attempt);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to parse models from script (attempt {}): {}", attempt, e);
+                        last_error = Some(e);
+                        
+                        // 짧은 지연 후 재시도
+                        if attempt < 3 {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Failed to parse models from script: {}, falling back to hardcoded list", e);
-                }
+            } else {
+                eprintln!("Download script not found at {:?} (attempt {})", script_path, attempt);
+                break;
             }
-        } else {
-            eprintln!("Download script not found at {:?}, using hardcoded list", script_path);
+        }
+        
+        // 스크립트 파싱이 실패했을 때 상세한 로그와 함께 폴백
+        if let Some(error) = last_error {
+            eprintln!("All script parsing attempts failed, last error: {}", error);
         }
         
         // 폴백: 하드코딩된 모델 목록
-        Ok(self.get_fallback_models())
+        let fallback_models = self.get_fallback_models();
+        eprintln!("Using fallback model list with {} models", fallback_models.len());
+        Ok(fallback_models)
     }
 
     async fn parse_models_from_script(&self, script_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
