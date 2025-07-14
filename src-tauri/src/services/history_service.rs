@@ -78,7 +78,7 @@ impl HistoryService {
         Ok(history)
     }
     
-    /// 변환 완료 시 결과 파일들을 히스토리에 추가합니다
+    /// 변환 완료 시 결과 파일들을 히스토리에 추가합니다 (파일 복사)
     pub async fn add_transcription_results(
         &self,
         history_id: &str,
@@ -97,27 +97,60 @@ impl HistoryService {
                 
                 // 파일 크기 가져오기
                 let metadata = tokio::fs::metadata(&target_path).await?;
-                let file_size = metadata.len();
                 
-                // 결과 추가
-                let result = TranscriptionResult {
+                let result_file = TranscriptionResult {
+                    format,
                     file_path: target_path,
-                    format: format.clone(),
-                    file_size,
+                    file_size: metadata.len(),
                     created_at: chrono::Utc::now().to_rfc3339(),
                 };
                 
-                history = history.add_result(result);
-                
-                // 원본 파일 삭제 (선택적)
-                // tokio::fs::remove_file(&source_path).await.ok();
+                history.results.push(result_file);
             }
         }
         
-        // 히스토리를 완료로 마크
-        history = history.mark_completed();
+        // 완료 시간 설정
+        history.completed_at = Some(chrono::Utc::now().to_rfc3339());
+        history.status = TranscriptionStatus::Completed;
         
-        // 메타데이터 업데이트
+        // 메타데이터 저장
+        self.save_history_metadata(&history).await?;
+        
+        // 히스토리 인덱스 업데이트
+        self.update_history_index(&history).await?;
+        
+        Ok(history)
+    }
+    
+    /// 이미 올바른 위치에 있는 결과 파일들을 히스토리에 등록합니다 (복사 없음)
+    pub async fn register_existing_results(
+        &self,
+        history_id: &str,
+        result_files: Vec<(PathBuf, String)>, // (파일 경로, 형식)
+    ) -> Result<TranscriptionHistory> {
+        let mut history = self.load_history_metadata(history_id).await?;
+        
+        for (file_path, format) in result_files {
+            if file_path.exists() {
+                // 파일 크기 가져오기
+                let metadata = tokio::fs::metadata(&file_path).await?;
+                
+                let result_file = TranscriptionResult {
+                    format,
+                    file_path,
+                    file_size: metadata.len(),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                
+                history.results.push(result_file);
+            }
+        }
+        
+        // 완료 시간 설정
+        history.completed_at = Some(chrono::Utc::now().to_rfc3339());
+        history.status = TranscriptionStatus::Completed;
+        
+        // 메타데이터 저장
         self.save_history_metadata(&history).await?;
         
         // 히스토리 인덱스 업데이트

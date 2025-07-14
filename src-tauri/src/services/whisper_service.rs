@@ -533,9 +533,10 @@ impl WhisperService {
             return Err(anyhow::anyhow!("Whisper binary not found"));
         };
 
-        // 히스토리 결과 디렉토리 생성
+        // 히스토리 결과 디렉토리 생성 (files 서브디렉토리 포함)
         let results_dir = self.history_service.get_history_directory(&history_id);
-        tokio::fs::create_dir_all(&results_dir).await?;
+        let files_dir = results_dir.join("files");
+        tokio::fs::create_dir_all(&files_dir).await?;
         
         let mut args = vec![
             "-m".to_string(), 
@@ -544,8 +545,8 @@ impl WhisperService {
             config.input_file.clone()
         ];
 
-        // 출력 경로를 히스토리 디렉토리로 설정
-        let output_file_base = results_dir.join(&original_file_name);
+        // 출력 경로를 files 디렉토리로 설정하여 중복 저장 방지
+        let output_file_base = files_dir.join("result");
         
         // --output-file 옵션으로 베이스 경로 지정 (확장자 제외)
         args.push("--output-file".to_string());
@@ -669,17 +670,12 @@ impl WhisperService {
     async fn collect_and_save_result_files(
         history_service: &HistoryService,
         history_id: &str,
-        input_path: &PathBuf,
+        _input_path: &PathBuf,
         options: &std::collections::HashMap<String, String>,
     ) -> anyhow::Result<()> {
-        let input_file_name = input_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("result");
-        
-        // 히스토리 디렉토리에서 결과 파일들 찾기
+        // files 디렉토리에서 결과 파일들 찾기 (whisper.cpp가 직접 저장한 위치)
         let results_dir = history_service.get_history_directory(history_id);
-        let output_file_base = results_dir.join(input_file_name);
+        let files_dir = results_dir.join("files");
         
         let mut result_files = Vec::new();
         
@@ -693,13 +689,12 @@ impl WhisperService {
             ("output-lrc", "lrc"),
         ];
         
-        eprintln!("Looking for result files in history directory: {:?}", results_dir);
-        eprintln!("Output file base: {:?}", output_file_base);
+        eprintln!("Looking for result files in files directory: {:?}", files_dir);
         
         for (option_key, format) in output_formats {
             // 해당 옵션이 활성화되어 있거나, 기본 srt 출력인 경우 
             if options.contains_key(option_key) || format == "srt" {
-                let result_file_path = PathBuf::from(format!("{}.{}", output_file_base.to_string_lossy(), format));
+                let result_file_path = files_dir.join(format!("result.{}", format));
                 
                 eprintln!("Checking for result file: {:?}", result_file_path);
                 
@@ -713,11 +708,11 @@ impl WhisperService {
         }
         
         if result_files.is_empty() {
-            return Err(anyhow::anyhow!("No result files found in history directory"));
+            return Err(anyhow::anyhow!("No result files found in files directory"));
         }
         
-        // 결과 파일들을 히스토리에 등록
-        history_service.add_transcription_results(history_id, result_files).await?;
+        // 결과 파일들을 히스토리에 등록 (이미 올바른 위치에 있으므로 복사하지 않음)
+        history_service.register_existing_results(history_id, result_files).await?;
         
         Ok(())
     }
