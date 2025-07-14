@@ -35,6 +35,47 @@ export interface DownloadProgress {
   status: 'Starting' | 'Downloading' | 'Completed' | 'Failed' | 'Cancelled';
 }
 
+export interface TranscriptionResult {
+  file_path: string;
+  format: string;         // "txt", "srt", "vtt", "csv", "json", "lrc"
+  file_size: number;      // 파일 크기 (bytes)
+  created_at: string;     // ISO 8601 timestamp
+}
+
+export interface TranscriptionHistory {
+  id: string;                         // 고유 ID (UUID)
+  original_file_name: string;         // 원본 파일명
+  original_file_path: string;         // 원본 파일 경로
+  model_used: string;                 // 사용된 모델
+  options_used: Record<string, string>; // 사용된 옵션들
+  results: TranscriptionResult[];     // 생성된 결과 파일들
+  status: 'Idle' | 'Running' | 'Completed' | 'Failed'; // 변환 상태
+  created_at: string;                 // 변환 시작 시간 (ISO 8601)
+  completed_at?: string;              // 변환 완료 시간 (ISO 8601)
+  duration_seconds?: number;          // 변환 소요 시간 (초)
+  tags: string[];                     // 사용자 태그들
+  notes?: string;                     // 사용자 메모
+  error_message?: string;             // 실패 시 에러 메시지
+}
+
+export interface HistoryQuery {
+  limit?: number;
+  offset?: number;
+  search?: string;          // 파일명 검색
+  model_filter?: string;    // 모델별 필터
+  format_filter?: string;   // 형식별 필터
+  tag_filter?: string;      // 태그별 필터
+  status_filter?: 'Idle' | 'Running' | 'Completed' | 'Failed'; // 상태별 필터
+  date_from?: string;       // 시작 날짜 (ISO 8601)
+  date_to?: string;         // 종료 날짜 (ISO 8601)
+}
+
+export interface HistoryListResponse {
+  items: TranscriptionHistory[];
+  total_count: number;
+  has_more: boolean;
+}
+
 export const whisperApi = {
   async checkInstallation(): Promise<boolean> {
     return invoke('check_whisper_installation');
@@ -94,5 +135,35 @@ export const whisperApi = {
 
   async deleteModel(modelName: string): Promise<string> {
     return invoke('delete_model', { modelName });
+  },
+
+  // ===== 히스토리 관련 API =====
+  
+  async listTranscriptionHistory(query: HistoryQuery = {}): Promise<HistoryListResponse> {
+    return invoke('list_transcription_history', { query });
+  },
+
+  async getTranscriptionHistory(historyId: string): Promise<TranscriptionHistory> {
+    return invoke('get_transcription_history', { historyId });
+  },
+
+  async deleteTranscriptionHistory(historyId: string): Promise<string> {
+    return invoke('delete_transcription_history', { historyId });
+  },
+
+  async updateHistoryTags(historyId: string, tags: string[]): Promise<TranscriptionHistory> {
+    return invoke('update_history_tags', { historyId, tags });
+  },
+
+  async updateHistoryNotes(historyId: string, notes?: string): Promise<TranscriptionHistory> {
+    return invoke('update_history_notes', { historyId, notes });
+  },
+
+  async downloadResultFile(historyId: string, format: string, savePath: string): Promise<string> {
+    return invoke('download_result_file', { historyId, format, savePath });
+  },
+
+  async getResultFileInfo(historyId: string): Promise<TranscriptionResult[]> {
+    return invoke('get_result_file_info', { historyId });
   },
 };
