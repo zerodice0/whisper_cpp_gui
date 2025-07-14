@@ -171,18 +171,74 @@ impl WhisperInstaller {
     pub async fn download_model(&self, model_name: &str) -> anyhow::Result<()> {
         let script_path = self.whisper_repo_path.join("models").join("download-ggml-model.sh");
         
-        if !script_path.exists() {
-            return Err(anyhow::anyhow!("Download script not found"));
+        if script_path.exists() {
+            eprintln!("Using whisper.cpp download script for model: {}", model_name);
+            return self.download_with_script(&script_path, model_name).await;
+        } else {
+            eprintln!("Script not found, using direct download for model: {}", model_name);
+            return self.download_with_direct_url(model_name).await;
+        }
+    }
+
+    async fn download_with_script(&self, script_path: &std::path::Path, model_name: &str) -> anyhow::Result<()> {
+        // 스크립트 실행 권한 확인 및 설정
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(script_path)?;
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(script_path, permissions)?;
+        }
+        
+        eprintln!("Downloading model {} using script: {:?}", model_name, script_path);
+        eprintln!("Target models directory: {:?}", self.models_path);
+        
+        let output = TokioCommand::new("bash")
+            .args([&script_path.to_string_lossy(), model_name, &self.models_path.to_string_lossy()])
+            .current_dir(&self.whisper_repo_path.join("models"))
+            .output()
+            .await?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        
+        eprintln!("Script stdout: {}", stdout);
+        if !stderr.is_empty() {
+            eprintln!("Script stderr: {}", stderr);
         }
 
-        let output = TokioCommand::new("bash")
-            .args([&script_path.to_string_lossy(), model_name])
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Model download failed: {}\n{}", stdout, stderr));
+        }
+
+        Ok(())
+    }
+
+    async fn download_with_direct_url(&self, model_name: &str) -> anyhow::Result<()> {
+        // 폴백: 직접 URL로 다운로드 (기존 방식)
+        let model_url = get_model_url_dynamic(model_name)?;
+        let output_file = self.models_path.join(format!("ggml-{}.bin", model_name));
+        
+        std::fs::create_dir_all(&self.models_path)?;
+        
+        eprintln!("Downloading {} from {}", model_name, model_url);
+        
+        let output = TokioCommand::new("wget")
+            .args([
+                "--no-config",
+                "--quiet", 
+                "--show-progress",
+                "-O", &output_file.to_string_lossy(),
+                &model_url
+            ])
             .current_dir(&self.models_path)
             .output()
             .await?;
 
         if !output.status.success() {
-            return Err(anyhow::anyhow!("Model download failed: {}", String::from_utf8_lossy(&output.stderr)));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Direct download failed: {}", stderr));
         }
 
         Ok(())
@@ -335,6 +391,17 @@ fn get_model_url(model_name: &str) -> anyhow::Result<String> {
         _ => return Err(anyhow::anyhow!("Unknown model: {}", model_name)),
     };
     
+    Ok(url)
+}
+
+fn get_model_url_dynamic(model_name: &str) -> anyhow::Result<String> {
+    let base_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+    
+    // 모든 모델 변형을 지원하는 동적 URL 생성
+    // 모델명이 정확히 일치하므로 ggml-{model}.bin 형식으로 구성
+    let url = format!("{}/ggml-{}.bin", base_url, model_name);
+    
+    eprintln!("Generated dynamic URL for {}: {}", model_name, url);
     Ok(url)
 }
 
