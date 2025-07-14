@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/api/dialog';
 import { listen } from '@tauri-apps/api/event';
 import { whisperApi, ProgressInfo, WhisperOptions, WhisperConfig } from '../services/api';
@@ -13,6 +14,7 @@ interface TranscriptionState {
 }
 
 export const Transcription: React.FC = React.memo(() => {
+  const { t } = useTranslation();
   const [state, setState] = useState<TranscriptionState>({
     currentFile: null,
     status: 'idle',
@@ -91,7 +93,7 @@ export const Transcription: React.FC = React.memo(() => {
       setState(prev => ({ 
         ...prev, 
         status: 'failed',
-        logs: [...prev.logs, `❌ 변환 실패: ${(error as Error).message}`]
+        logs: [...prev.logs, `❌ ${t('transcription.transcriptionFailed')}: ${(error as Error).message}`]
       }));
     }
   };
@@ -136,7 +138,7 @@ export const Transcription: React.FC = React.memo(() => {
           ...prev, 
           status: 'completed',
           progress: 1,
-          logs: [...prev.logs, `✅ 변환 완료: ${event.payload}`]
+          logs: [...prev.logs, `✅ ${t('transcription.transcriptionCompleted')}: ${event.payload}`]
         }));
       });
 
@@ -145,7 +147,7 @@ export const Transcription: React.FC = React.memo(() => {
         setState(prev => ({ 
           ...prev, 
           status: 'failed',
-          logs: [...prev.logs, `❌ 에러: ${event.payload}`]
+          logs: [...prev.logs, `❌ ${t('common.error')}: ${event.payload}`]
         }));
       });
 
@@ -170,13 +172,13 @@ export const Transcription: React.FC = React.memo(() => {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-gray-900">음성 변환</h2>
-        <p className="text-gray-600 mt-1">단일 음성 파일을 텍스트로 변환합니다</p>
+        <h2 className="text-2xl font-bold text-gray-900">{t('transcription.title')}</h2>
+        <p className="text-gray-600 mt-1">{t('transcription.subtitle')}</p>
       </div>
 
       {/* 파일 선택 */}
       <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">1. 파일 선택</h3>
+        <h3 className="text-lg font-medium text-gray-900 mb-4">1. {t('transcription.selectFile')}</h3>
         
         {!state.currentFile ? (
           <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
@@ -186,13 +188,13 @@ export const Transcription: React.FC = React.memo(() => {
               </svg>
             </div>
             <p className="text-gray-500 mb-4">
-              음성 파일을 선택하세요 (MP3, WAV, M4A, FLAC, AAC, OGG)
+              {t('transcription.dragDropText')}
             </p>
             <button
               onClick={selectFile}
               className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
             >
-              파일 선택
+              {t('transcription.selectAudioFile')}
             </button>
           </div>
         ) : (
@@ -206,7 +208,7 @@ export const Transcription: React.FC = React.memo(() => {
                 onClick={selectFile}
                 className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
               >
-                다른 파일 선택
+                {t('transcription.selectAnotherFile')}
               </button>
             </div>
           </div>
@@ -215,12 +217,12 @@ export const Transcription: React.FC = React.memo(() => {
 
       {/* 모델 선택 */}
       <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">2. 모델 선택</h3>
+        <h3 className="text-lg font-medium text-gray-900 mb-4">2. {t('transcription.selectModel')}</h3>
         
         {downloadedModels.length === 0 ? (
           <div className="text-center py-4">
-            <p className="text-gray-500 mb-2">다운로드된 모델이 없습니다</p>
-            <p className="text-sm text-gray-400">Management 탭에서 모델을 다운로드하세요</p>
+            <p className="text-gray-500 mb-2">{t('transcription.noModelsDownloaded')}</p>
+            <p className="text-sm text-gray-400">{t('transcription.downloadModelsFirst')}</p>
           </div>
         ) : (
           <select
@@ -244,13 +246,13 @@ export const Transcription: React.FC = React.memo(() => {
 
       {/* 변환 실행 */}
       <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">3. 변환 실행</h3>
+        <h3 className="text-lg font-medium text-gray-900 mb-4">3. {t('transcription.startTranscription')}</h3>
         
         <div className="space-y-4">
           {state.status === 'running' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">진행률</span>
+                <span className="text-sm text-gray-600">{t('transcription.transcriptionProgress')}</span>
                 <span className="text-sm font-medium">{Math.round(state.progress * 100)}%</span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2">
@@ -272,7 +274,7 @@ export const Transcription: React.FC = React.memo(() => {
                   : 'bg-green-600 text-white hover:bg-green-700'
               }`}
             >
-              {state.status === 'running' ? '변환 중...' : '변환 시작'}
+              {state.status === 'running' ? t('transcription.transcribing') : t('transcription.startTranscription')}
             </button>
 
             {state.status === 'running' && (
@@ -280,7 +282,7 @@ export const Transcription: React.FC = React.memo(() => {
                 onClick={cancelTranscription}
                 className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
               >
-                취소
+                {t('common.cancel')}
               </button>
             )}
 
@@ -289,7 +291,7 @@ export const Transcription: React.FC = React.memo(() => {
                 onClick={resetTranscription}
                 className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
               >
-                초기화
+                {t('transcription.reset')}
               </button>
             )}
           </div>
@@ -303,9 +305,9 @@ export const Transcription: React.FC = React.memo(() => {
                   ? 'bg-green-50 text-green-800'
                   : 'bg-red-50 text-red-800'
             }`}>
-              {state.status === 'running' && '🔄 음성을 텍스트로 변환하는 중...'}
-              {state.status === 'completed' && '✅ 변환이 완료되었습니다!'}
-              {state.status === 'failed' && '❌ 변환에 실패했습니다.'}
+              {state.status === 'running' && `🔄 ${t('transcription.processingAudio')}`}
+              {state.status === 'completed' && `✅ ${t('transcription.transcriptionComplete')}`}
+              {state.status === 'failed' && `❌ ${t('transcription.transcriptionFailed')}`}
             </div>
           )}
         </div>
@@ -314,7 +316,7 @@ export const Transcription: React.FC = React.memo(() => {
       {/* 실시간 로그 */}
       {state.logs.length > 0 && (
         <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">변환 로그</h3>
+          <h3 className="text-lg font-medium text-gray-900 mb-4">{t('transcription.transcriptionLog')}</h3>
           <div className="bg-gray-50 p-4 rounded-md max-h-64 overflow-y-auto">
             <div className="font-mono text-sm space-y-1">
               {state.logs.map((log, index) => (

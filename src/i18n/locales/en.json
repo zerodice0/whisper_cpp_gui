@@ -133,7 +133,31 @@
     "transcriptionLog": "Transcription Log",
     "noModelSelected": "Please select a model first",
     "noFileSelected": "Please select an audio file first",
-    "modelNotDownloaded": "Selected model is not downloaded. Please download it in the Management tab first."
+    "modelNotDownloaded": "Selected model is not downloaded. Please download it in the Management tab first.",
+    "selectAnotherFile": "Select Another File",
+    "noModelsDownloaded": "No models downloaded yet",
+    "downloadModelsFirst": "Please download models in the Management tab",
+    "reset": "Reset",
+    "processingAudio": "Converting audio to text...",
+    "transcriptionComplete": "Transcription completed!",
+    "transcriptionCompleted": "Transcription completed",
+    "transcriptionFailed": "Transcription failed",
+    "whisperOptions": "whisper.cpp Options",
+    "loadingOptions": "Loading options",
+    "basicOptions": "Basic Options",
+    "advancedOptions": "Advanced Options",
+    "appliedOptions": "Applied Options",
+    "enable": "Enable",
+    "enterValue": "Enter value",
+    "enterNumber": "Enter number",
+    "enterFloat": "Enter decimal number",
+    "outputFormats": "Output Formats",
+    "outputTxt": "Text File",
+    "outputSrt": "SRT Subtitle",
+    "outputVtt": "WebVTT Subtitle",
+    "outputCsv": "CSV File",
+    "outputJson": "JSON File",
+    "outputLrc": "LRC Lyrics"
   },
   "output": {
     "title": "Transcription Output",
@@ -184,7 +208,8 @@
     "inProgress": "In Progress...",
     "noDescription": "No description",
     "unknownSize": "Unknown size",
-    "size": "Size"
+    "size": "Size",
+    "selectOption": "Please select"
   },
   "download": {
     "starting": "Starting...",

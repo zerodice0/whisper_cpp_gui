@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::collections::HashMap;
 use tauri::Manager;
 use crate::models::*;
 use crate::services::whisper_installer::WhisperInstaller;
@@ -120,11 +119,18 @@ impl WhisperService {
             return Err(anyhow::anyhow!("Model not found: {}", model_name));
         }
 
-        // 실제 바이너리 위치 찾기
+        // whisper-cli 바이너리 찾기 (최신 whisper.cpp에서 권장)
+        let whisper_cli_binary = self.whisper_repo_path.join("build").join("bin").join("whisper-cli");
+        let fallback_cli_binary = self.whisper_repo_path.join("build").join("whisper-cli");
+        // 백워드 호환성을 위한 main 바이너리
         let main_binary = self.whisper_repo_path.join("build").join("bin").join("main");
         let fallback_binary = self.whisper_repo_path.join("build").join("main");
         
-        let binary_path = if main_binary.exists() {
+        let binary_path = if whisper_cli_binary.exists() {
+            &whisper_cli_binary
+        } else if fallback_cli_binary.exists() {
+            &fallback_cli_binary
+        } else if main_binary.exists() {
             &main_binary
         } else if fallback_binary.exists() {
             &fallback_binary
@@ -210,28 +216,55 @@ impl WhisperService {
     pub async fn get_whisper_options(&self) -> anyhow::Result<WhisperOptions> {
         use tokio::process::Command as TokioCommand;
         
+        // whisper-cli 바이너리 찾기 (최신 whisper.cpp에서 권장)
+        let whisper_cli_binary = self.whisper_repo_path.join("build").join("bin").join("whisper-cli");
+        let fallback_cli_binary = self.whisper_repo_path.join("build").join("whisper-cli");
+        // 백워드 호환성을 위한 main 바이너리
         let main_binary = self.whisper_repo_path.join("build").join("bin").join("main");
         let fallback_binary = self.whisper_repo_path.join("build").join("main");
         
-        let binary_path = if main_binary.exists() {
-            &main_binary
+        let binary_path = if whisper_cli_binary.exists() {
+            Some(&whisper_cli_binary)
+        } else if fallback_cli_binary.exists() {
+            Some(&fallback_cli_binary)
+        } else if main_binary.exists() {
+            Some(&main_binary)
         } else if fallback_binary.exists() {
-            &fallback_binary
+            Some(&fallback_binary)
         } else {
-            return Err(anyhow::anyhow!("Whisper binary not found"));
+            eprintln!("Whisper binary not found, using default options");
+            None
         };
 
-        let output = TokioCommand::new(binary_path)
-            .arg("--help")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to get whisper help"));
+        if let Some(binary) = binary_path {
+            eprintln!("Attempting to get whisper options from: {}", binary.display());
+            
+            match TokioCommand::new(binary)
+                .arg("--help")
+                .output()
+                .await 
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        let help_text = String::from_utf8_lossy(&output.stdout);
+                        eprintln!("Successfully got help output, parsing...");
+                        return Ok(parse_whisper_help(&help_text));
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        eprintln!("Whisper --help failed with stderr: {}", stderr);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to execute whisper --help: {}", e);
+                }
+            }
         }
-
-        let help_text = String::from_utf8_lossy(&output.stdout);
-        Ok(parse_whisper_help(&help_text))
+        
+        // 바이너리가 없거나 실행에 실패한 경우 기본 옵션 제공
+        eprintln!("Falling back to default options");
+        let mut options = Vec::new();
+        add_default_options(&mut options);
+        Ok(WhisperOptions { options })
     }
 
     pub async fn start_transcription_with_options(
@@ -249,10 +282,18 @@ impl WhisperService {
             return Err(anyhow::anyhow!("Model not found: {}", config.model));
         }
 
+        // whisper-cli 바이너리 찾기 (최신 whisper.cpp에서 권장)
+        let whisper_cli_binary = self.whisper_repo_path.join("build").join("bin").join("whisper-cli");
+        let fallback_cli_binary = self.whisper_repo_path.join("build").join("whisper-cli");
+        // 백워드 호환성을 위한 main 바이너리
         let main_binary = self.whisper_repo_path.join("build").join("bin").join("main");
         let fallback_binary = self.whisper_repo_path.join("build").join("main");
         
-        let binary_path = if main_binary.exists() {
+        let binary_path = if whisper_cli_binary.exists() {
+            &whisper_cli_binary
+        } else if fallback_cli_binary.exists() {
+            &fallback_cli_binary
+        } else if main_binary.exists() {
             &main_binary
         } else if fallback_binary.exists() {
             &fallback_binary
@@ -400,75 +441,238 @@ fn convert_to_fcpxml(transcription: &str) -> String {
 pub fn parse_whisper_help(help_text: &str) -> WhisperOptions {
     let mut options = Vec::new();
     
-    let lines: Vec<&str> = help_text.lines().collect();
+    eprintln!("PARSING WHISPER HELP OUTPUT:");
+    eprintln!("Length: {} chars", help_text.len());
+    eprintln!("First 500 chars: {}", &help_text.chars().take(500).collect::<String>());
     
-    for line in lines {
+    let lines: Vec<&str> = help_text.lines().collect();
+    eprintln!("Total lines: {}", lines.len());
+    
+    let mut in_options_section = false;
+    
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         
-        if trimmed.starts_with("-") && trimmed.contains(" ") {
+        // 옵션 섹션 시작 감지
+        if trimmed.contains("options:") || trimmed.contains("Options:") || trimmed.contains("arguments:") {
+            in_options_section = true;
+            eprintln!("Found options section at line {}: {}", i, trimmed);
+            continue;
+        }
+        
+        // 빈 줄이나 다른 섹션이 시작되면 옵션 섹션 종료
+        if in_options_section && trimmed.is_empty() {
+            continue;
+        }
+        
+        if in_options_section && trimmed.starts_with("-") {
+            eprintln!("Parsing option line {}: {}", i, trimmed);
             if let Some(option) = parse_option_line(trimmed) {
+                eprintln!("Successfully parsed option: {:?}", option);
                 options.push(option);
+            } else {
+                eprintln!("Failed to parse option line: {}", trimmed);
             }
+        }
+        
+        // 새로운 섹션이 시작되면 (예: "examples:", "usage:") 옵션 섹션 종료
+        if in_options_section && (trimmed.contains("usage:") || trimmed.contains("examples:") || trimmed.contains("example:")) {
+            break;
         }
     }
     
-    add_default_options(&mut options);
+    eprintln!("Parsed {} options from help text", options.len());
+    
+    // 기본 옵션이 파싱되지 않았다면 추가
+    if options.is_empty() {
+        eprintln!("No options parsed, adding default options");
+        add_default_options(&mut options);
+    } else {
+        // 파싱된 옵션에 추가로 필요한 옵션들 보완
+        add_missing_common_options(&mut options);
+    }
+    
+    eprintln!("Final options count: {}", options.len());
     
     WhisperOptions { options }
 }
 
 fn parse_option_line(line: &str) -> Option<WhisperOption> {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.is_empty() {
+    eprintln!("  Parsing line: '{}'", line);
+    
+    // 여러 가지 형식 지원:
+    // "  -l, --language LANG        spoken language (auto for auto-detection) (default: auto)"
+    // "  -t N, --threads N          number of threads to use during computation (default: 4)"
+    // "  --output-txt               output result in a text file"
+    // "  -f FILE, --file FILE       audio file to process"
+    
+    let trimmed = line.trim();
+    if !trimmed.starts_with("-") {
         return None;
     }
     
-    let option_part = parts[0];
-    let description = if parts.len() > 1 {
-        parts[1..].join(" ")
-    } else {
-        "".to_string()
-    };
-    
-    let (name, short_name) = if option_part.contains(",") {
-        let opts: Vec<&str> = option_part.split(",").map(|s| s.trim()).collect();
-        let long = opts.iter().find(|opt| opt.starts_with("--"));
-        let short = opts.iter().find(|opt| opt.starts_with("-") && !opt.starts_with("--"));
-        
-        if let Some(long_opt) = long {
-            let name = long_opt.trim_start_matches("--").to_string();
-            let short_name = short.map(|s| s.trim_start_matches("-").to_string());
-            (name, short_name)
+    // 옵션 부분과 설명 부분 분리
+    let (option_part, description) = if let Some(_pos) = trimmed.find("  ") {
+        let parts = trimmed.split("  ").collect::<Vec<_>>();
+        if parts.len() >= 2 {
+            let option_part = parts[0].trim();
+            let description = parts[1..].join(" ");
+            (option_part, description)
         } else {
-            return None;
+            (trimmed, String::new())
         }
-    } else if option_part.starts_with("--") {
-        (option_part.trim_start_matches("--").to_string(), None)
-    } else if option_part.starts_with("-") && option_part.len() > 1 {
-        let name = option_part.trim_start_matches("-").to_string();
-        (name.clone(), Some(name))
     } else {
-        return None;
+        // 단일 공백으로 구분된 경우
+        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+        if parts.len() >= 2 {
+            (parts[0], parts[1].to_string())
+        } else {
+            (trimmed, String::new())
+        }
     };
     
-    let option_type = if description.contains("[") || description.contains("value") || description.contains("string") {
-        WhisperOptionType::String
-    } else if description.contains("number") || description.contains("int") {
-        WhisperOptionType::Integer
-    } else if description.contains("float") || description.contains("seconds") {
-        WhisperOptionType::Float
-    } else {
-        WhisperOptionType::Flag
-    };
+    eprintln!("    Option part: '{}', Description: '{}'", option_part, description);
+    
+    // 옵션 이름 파싱
+    let (name, short_name) = parse_option_names(option_part)?;
+    
+    eprintln!("    Parsed name: '{}', short_name: {:?}", name, short_name);
+    
+    // 타입 결정
+    let option_type = determine_option_type(option_part, &description);
+    
+    // 기본값 추출
+    let default_value = extract_default_value(&description);
+    
+    // 가능한 값들 추출 (특정 옵션들에 대해)
+    let possible_values = extract_possible_values(&name, &description);
+    
+    eprintln!("    Final option: name={}, type={:?}, default={:?}", name, option_type, default_value);
     
     Some(WhisperOption {
         name,
         short_name,
         description,
         option_type,
-        default_value: None,
-        possible_values: None,
+        default_value,
+        possible_values,
     })
+}
+
+fn parse_option_names(option_part: &str) -> Option<(String, Option<String>)> {
+    // "-l, --language" 또는 "--output-txt" 또는 "-f FILE" 등의 형식
+    
+    let cleaned = option_part.replace(",", "");
+    let parts: Vec<&str> = cleaned.split_whitespace().collect();
+    
+    let mut long_name = None;
+    let mut short_name = None;
+    
+    for part in parts {
+        if part.starts_with("--") {
+            long_name = Some(part.trim_start_matches("--").to_string());
+        } else if part.starts_with("-") && part.len() == 2 {
+            short_name = Some(part.trim_start_matches("-").to_string());
+        }
+    }
+    
+    // 긴 이름이 우선, 없으면 짧은 이름 사용
+    if let Some(name) = long_name {
+        Some((name, short_name))
+    } else if let Some(name) = short_name.clone() {
+        Some((name, None))
+    } else {
+        None
+    }
+}
+
+fn determine_option_type(option_part: &str, description: &str) -> WhisperOptionType {
+    let combined = format!("{} {}", option_part, description).to_lowercase();
+    
+    // 플래그 타입 (값이 없는 옵션)
+    if combined.contains("flag") || 
+       (!combined.contains("value") && !combined.contains("file") && 
+        !combined.contains("number") && !combined.contains("lang") &&
+        !combined.contains("n") && !combined.contains("string") &&
+        !option_part.contains("FILE") && !option_part.contains("LANG") &&
+        !option_part.contains("N") && !option_part.contains("VAL")) {
+        return WhisperOptionType::Flag;
+    }
+    
+    // 정수 타입
+    if combined.contains("threads") || combined.contains("number") || 
+       combined.contains("int") || option_part.contains(" N") ||
+       combined.contains("processors") || combined.contains("duration") {
+        return WhisperOptionType::Integer;
+    }
+    
+    // 실수 타입
+    if combined.contains("float") || combined.contains("temperature") ||
+       combined.contains("probability") || combined.contains("threshold") {
+        return WhisperOptionType::Float;
+    }
+    
+    // 기본적으로 문자열 타입
+    WhisperOptionType::String
+}
+
+fn extract_default_value(description: &str) -> Option<String> {
+    // "(default: value)" 패턴 찾기
+    if let Some(start) = description.find("(default: ") {
+        if let Some(end) = description[start..].find(")") {
+            let default_part = &description[start + 10..start + end];
+            return Some(default_part.trim().to_string());
+        }
+    }
+    
+    None
+}
+
+fn extract_possible_values(name: &str, _description: &str) -> Option<Vec<String>> {
+    match name {
+        "language" => Some(vec![
+            "auto".to_string(), "en".to_string(), "ko".to_string(), 
+            "ja".to_string(), "zh".to_string(), "fr".to_string(),
+            "de".to_string(), "es".to_string(), "ru".to_string(),
+            "it".to_string(), "pt".to_string(), "ar".to_string()
+        ]),
+        _ => None
+    }
+}
+
+fn add_missing_common_options(options: &mut Vec<WhisperOption>) {
+    let essential_options = vec![
+        ("output-txt", "Generate text output", WhisperOptionType::Flag, None),
+        ("output-srt", "Generate SRT subtitle output", WhisperOptionType::Flag, None),
+        ("language", "Spoken language (auto for auto-detection)", WhisperOptionType::String, Some("auto")),
+        ("threads", "Number of threads to use during computation", WhisperOptionType::Integer, Some("4")),
+    ];
+    
+    for (name, desc, opt_type, default) in essential_options {
+        if !options.iter().any(|opt| opt.name == name) {
+            options.push(WhisperOption {
+                name: name.to_string(),
+                short_name: match name {
+                    "language" => Some("l".to_string()),
+                    "threads" => Some("t".to_string()),
+                    _ => None,
+                },
+                description: desc.to_string(),
+                option_type: opt_type,
+                default_value: default.map(|s| s.to_string()),
+                possible_values: if name == "language" {
+                    Some(vec![
+                        "auto".to_string(), "en".to_string(), "ko".to_string(), 
+                        "ja".to_string(), "zh".to_string(), "fr".to_string(),
+                        "de".to_string(), "es".to_string(), "ru".to_string(),
+                        "it".to_string(), "pt".to_string(), "ar".to_string()
+                    ])
+                } else {
+                    None
+                },
+            });
+        }
+    }
 }
 
 fn add_default_options(options: &mut Vec<WhisperOption>) {
@@ -476,7 +680,7 @@ fn add_default_options(options: &mut Vec<WhisperOption>) {
         WhisperOption {
             name: "output-txt".to_string(),
             short_name: None,
-            description: "Generate text output".to_string(),
+            description: "텍스트 파일 출력 생성".to_string(),
             option_type: WhisperOptionType::Flag,
             default_value: None,
             possible_values: None,
@@ -484,7 +688,39 @@ fn add_default_options(options: &mut Vec<WhisperOption>) {
         WhisperOption {
             name: "output-srt".to_string(),
             short_name: None,
-            description: "Generate SRT subtitle output".to_string(),
+            description: "SRT 자막 파일 출력 생성".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "output-vtt".to_string(),
+            short_name: None,
+            description: "WebVTT 자막 파일 출력 생성".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "output-csv".to_string(),
+            short_name: None,
+            description: "CSV 파일 출력 생성".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "output-json".to_string(),
+            short_name: None,
+            description: "JSON 파일 출력 생성".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "output-lrc".to_string(),
+            short_name: None,
+            description: "LRC 가사 파일 출력 생성".to_string(),
             option_type: WhisperOptionType::Flag,
             default_value: None,
             possible_values: None,
@@ -499,6 +735,7 @@ fn add_default_options(options: &mut Vec<WhisperOption>) {
                 "auto".to_string(), "en".to_string(), "ko".to_string(), 
                 "ja".to_string(), "zh".to_string(), "es".to_string(),
                 "fr".to_string(), "de".to_string(), "it".to_string(),
+                "pt".to_string(), "ru".to_string(), "ar".to_string(),
             ]),
         },
         WhisperOption {
@@ -507,6 +744,38 @@ fn add_default_options(options: &mut Vec<WhisperOption>) {
             description: "Number of threads to use during computation".to_string(),
             option_type: WhisperOptionType::Integer,
             default_value: Some("4".to_string()),
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "verbose".to_string(),
+            short_name: Some("v".to_string()),
+            description: "Verbose output".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "translate".to_string(),
+            short_name: None,
+            description: "Translate from source language to English".to_string(),
+            option_type: WhisperOptionType::Flag,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "duration".to_string(),
+            short_name: Some("d".to_string()),
+            description: "Duration of audio to process in milliseconds".to_string(),
+            option_type: WhisperOptionType::Integer,
+            default_value: None,
+            possible_values: None,
+        },
+        WhisperOption {
+            name: "offset".to_string(),
+            short_name: Some("o".to_string()),
+            description: "Offset of audio to start processing in milliseconds".to_string(),
+            option_type: WhisperOptionType::Integer,
+            default_value: None,
             possible_values: None,
         },
     ];
