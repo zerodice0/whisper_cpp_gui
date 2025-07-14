@@ -547,13 +547,17 @@ impl WhisperService {
         // 출력 경로를 히스토리 디렉토리로 설정
         let output_file_base = results_dir.join(&original_file_name);
         
-        // 출력 형식별로 경로 지정
+        // --output-file 옵션으로 베이스 경로 지정 (확장자 제외)
+        args.push("--output-file".to_string());
+        args.push(output_file_base.to_string_lossy().to_string());
+        
+        // 출력 형식별 플래그 설정
+        let mut has_output_format = false;
         for (key, value) in &config.options {
             if key.starts_with("output-") {
-                let format = key.strip_prefix("output-").unwrap();
-                let output_path = format!("{}.{}", output_file_base.to_string_lossy(), format);
+                // output-srt, output-txt 등은 플래그로만 사용
                 args.push(format!("--{}", key));
-                args.push(output_path);
+                has_output_format = true;
             } else if value.is_empty() {
                 args.push(format!("--{}", key));
             } else {
@@ -563,11 +567,14 @@ impl WhisperService {
         }
         
         // 기본 SRT 출력을 위한 설정 (사용자가 지정하지 않았을 경우)
-        if !config.options.contains_key("output-srt") {
-            let srt_output_path = format!("{}.srt", output_file_base.to_string_lossy());
+        if !has_output_format {
             args.push("--output-srt".to_string());
-            args.push(srt_output_path);
         }
+
+        // 실행될 명령어 로그 출력
+        eprintln!("Executing whisper command:");
+        eprintln!("Binary: {:?}", binary_path);
+        eprintln!("Args: {:?}", args);
 
         let mut cmd = TokioCommand::new(binary_path)
             .args(args)
