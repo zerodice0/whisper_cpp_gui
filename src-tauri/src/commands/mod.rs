@@ -196,6 +196,27 @@ pub async fn delete_model(
     Ok(format!("Model {} deleted successfully", model_name))
 }
 
+#[tauri::command]
+pub async fn validate_model(
+    model_name: String,
+    service: State<'_, WhisperServiceState>
+) -> Result<bool, String> {
+    let service = service.lock().await;
+    service.validate_model(&model_name).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn repair_model(
+    model_name: String,
+    service: State<'_, WhisperServiceState>
+) -> Result<String, String> {
+    let service = service.lock().await;
+    service.repair_model(&model_name).await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Model {} repaired successfully", model_name))
+}
+
 // ===== 히스토리 관련 명령들 =====
 
 #[tauri::command]

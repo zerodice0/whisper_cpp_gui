@@ -43,19 +43,103 @@ impl WhisperService {
     }
 
     pub async fn list_available_models(&self) -> anyhow::Result<Vec<String>> {
-        Ok(vec![
+        // whisper.cpp의 download-ggml-model.sh 스크립트에서 모델 목록을 파싱
+        let script_path = self.whisper_repo_path.join("models").join("download-ggml-model.sh");
+        
+        if script_path.exists() {
+            match self.parse_models_from_script(&script_path).await {
+                Ok(models) => {
+                    eprintln!("Loaded {} models from download script", models.len());
+                    return Ok(models);
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse models from script: {}, falling back to hardcoded list", e);
+                }
+            }
+        } else {
+            eprintln!("Download script not found at {:?}, using hardcoded list", script_path);
+        }
+        
+        // 폴백: 하드코딩된 모델 목록
+        Ok(self.get_fallback_models())
+    }
+
+    async fn parse_models_from_script(&self, script_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+        let content = tokio::fs::read_to_string(script_path).await?;
+        let mut models = Vec::new();
+        let mut in_models_section = false;
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            
+            // models 변수 시작 감지
+            if trimmed.starts_with("models=\"") {
+                in_models_section = true;
+                // 첫 번째 줄에 모델이 있는 경우 처리
+                let first_line = trimmed.trim_start_matches("models=\"");
+                if !first_line.is_empty() && first_line != "tiny" {
+                    // models=" 다음에 바로 모델명이 오는 경우는 거의 없지만 안전장치
+                }
+                continue;
+            }
+            
+            // models 변수 끝 감지
+            if in_models_section && trimmed.ends_with('"') {
+                // 마지막 줄의 모델 추가 (따옴표 제거)
+                let last_model = trimmed.trim_end_matches('"');
+                if !last_model.is_empty() {
+                    models.push(last_model.to_string());
+                }
+                break;
+            }
+            
+            // models 섹션 내의 모델명 추가
+            if in_models_section && !trimmed.is_empty() {
+                models.push(trimmed.to_string());
+            }
+        }
+        
+        if models.is_empty() {
+            return Err(anyhow::anyhow!("No models found in script"));
+        }
+        
+        eprintln!("Parsed models from script: {:?}", models);
+        Ok(models)
+    }
+
+    fn get_fallback_models(&self) -> Vec<String> {
+        vec![
             "tiny".to_string(),
             "tiny.en".to_string(),
+            "tiny-q5_1".to_string(),
+            "tiny.en-q5_1".to_string(),
+            "tiny-q8_0".to_string(),
             "base".to_string(),
             "base.en".to_string(),
+            "base-q5_1".to_string(),
+            "base.en-q5_1".to_string(),
+            "base-q8_0".to_string(),
             "small".to_string(),
             "small.en".to_string(),
+            "small.en-tdrz".to_string(),
+            "small-q5_1".to_string(),
+            "small.en-q5_1".to_string(),
+            "small-q8_0".to_string(),
             "medium".to_string(),
             "medium.en".to_string(),
+            "medium-q5_0".to_string(),
+            "medium.en-q5_0".to_string(),
+            "medium-q8_0".to_string(),
             "large-v1".to_string(),
             "large-v2".to_string(),
+            "large-v2-q5_0".to_string(),
+            "large-v2-q8_0".to_string(),
             "large-v3".to_string(),
-        ])
+            "large-v3-q5_0".to_string(),
+            "large-v3-turbo".to_string(),
+            "large-v3-turbo-q5_0".to_string(),
+            "large-v3-turbo-q8_0".to_string(),
+        ]
     }
 
     pub async fn list_downloaded_models(&self) -> anyhow::Result<Vec<String>> {
@@ -84,6 +168,107 @@ impl WhisperService {
 
     pub async fn download_official_model(&self, model_name: &str) -> anyhow::Result<()> {
         self.installer.download_model(model_name).await
+    }
+
+    pub async fn validate_model(&self, model_name: &str) -> anyhow::Result<bool> {
+        let model_path = self.models_path.join(format!("ggml-{}.bin", model_name));
+        
+        if !model_path.exists() {
+            return Ok(false);
+        }
+        
+        // 파일 크기 체크
+        let metadata = tokio::fs::metadata(&model_path).await?;
+        let file_size = metadata.len();
+        
+        // 예상 최소 파일 크기 (MB)
+        let min_expected_size = match model_name {
+            m if m.starts_with("tiny") => 39 * 1024 * 1024,      // ~39MB
+            m if m.starts_with("base") => 142 * 1024 * 1024,     // ~142MB  
+            m if m.starts_with("small") => 244 * 1024 * 1024,    // ~244MB
+            m if m.starts_with("medium") => 769 * 1024 * 1024,   // ~769MB
+            m if m.starts_with("large") => 1550 * 1024 * 1024,   // ~1550MB
+            _ => 10 * 1024 * 1024, // 기본 최소값 10MB
+        };
+        
+        if file_size < min_expected_size {
+            eprintln!("Model {} appears to be incomplete: {} bytes (expected >= {} bytes)", 
+                     model_name, file_size, min_expected_size);
+            return Ok(false);
+        }
+        
+        // whisper.cpp로 모델 검증 시도 (간단한 헤더 체크)
+        if let Err(e) = self.test_model_loading(model_name).await {
+            eprintln!("Model {} failed validation test: {}", model_name, e);
+            return Ok(false);
+        }
+        
+        Ok(true)
+    }
+
+    async fn test_model_loading(&self, model_name: &str) -> anyhow::Result<()> {
+        use tokio::process::Command as TokioCommand;
+        
+        let model_path = self.models_path.join(format!("ggml-{}.bin", model_name));
+        
+        // whisper-cli 바이너리 찾기
+        let whisper_cli_binary = self.whisper_repo_path.join("build").join("bin").join("whisper-cli");
+        let fallback_cli_binary = self.whisper_repo_path.join("build").join("whisper-cli");
+        let main_binary = self.whisper_repo_path.join("build").join("bin").join("main");
+        let fallback_binary = self.whisper_repo_path.join("build").join("main");
+        
+        let binary_path = if whisper_cli_binary.exists() {
+            &whisper_cli_binary
+        } else if fallback_cli_binary.exists() {
+            &fallback_cli_binary
+        } else if main_binary.exists() {
+            &main_binary
+        } else if fallback_binary.exists() {
+            &fallback_binary
+        } else {
+            return Err(anyhow::anyhow!("Whisper binary not found"));
+        };
+
+        // 모델 로딩 테스트 (매우 짧은 더미 파일로)
+        let output = TokioCommand::new(binary_path)
+            .args([
+                "-m", &model_path.to_string_lossy(),
+                "--help"  // 단순히 help만 표시하여 모델 로딩 확인
+            ])
+            .output()
+            .await?;
+            
+        // stderr에서 모델 로딩 에러 체크
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("ERROR not all tensors loaded") || 
+           stderr.contains("failed to load model") ||
+           stderr.contains("failed to initialize whisper context") {
+            return Err(anyhow::anyhow!("Model validation failed: {}", stderr));
+        }
+        
+        Ok(())
+    }
+
+    pub async fn repair_model(&self, model_name: &str) -> anyhow::Result<()> {
+        eprintln!("Attempting to repair model: {}", model_name);
+        
+        // 기존 손상된 파일 삭제
+        let model_path = self.models_path.join(format!("ggml-{}.bin", model_name));
+        if model_path.exists() {
+            tokio::fs::remove_file(&model_path).await?;
+            eprintln!("Removed corrupted model file: {:?}", model_path);
+        }
+        
+        // 모델 재다운로드
+        self.installer.download_model(model_name).await?;
+        
+        // 재다운로드 후 검증
+        if !self.validate_model(model_name).await? {
+            return Err(anyhow::anyhow!("Model repair failed - downloaded model is still invalid"));
+        }
+        
+        eprintln!("Model {} successfully repaired", model_name);
+        Ok(())
     }
 
     pub async fn download_model_with_progress(&self, model_name: &str, app_handle: tauri::AppHandle) -> anyhow::Result<()> {

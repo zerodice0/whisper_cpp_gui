@@ -137,6 +137,14 @@ export const whisperApi = {
     return invoke('delete_model', { modelName });
   },
 
+  async validateModel(modelName: string): Promise<boolean> {
+    return invoke('validate_model', { modelName });
+  },
+
+  async repairModel(modelName: string): Promise<string> {
+    return invoke('repair_model', { modelName });
+  },
+
   // ===== 히스토리 관련 API =====
   
   async listTranscriptionHistory(query: HistoryQuery = {}): Promise<HistoryListResponse> {

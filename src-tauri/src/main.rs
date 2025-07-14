@@ -37,6 +37,8 @@ async fn main() {
             get_whisper_options,
             start_transcription_with_options,
             download_model_with_progress,
+            validate_model,
+            repair_model,
             // 히스토리 관련 명령들
             list_transcription_history,
             get_transcription_history,
