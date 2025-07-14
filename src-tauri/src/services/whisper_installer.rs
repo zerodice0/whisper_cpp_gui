@@ -251,8 +251,6 @@ impl WhisperInstaller {
     ) -> anyhow::Result<()> {
         use crate::models::{DownloadProgress, DownloadStatus};
         
-        // 모델 URL 매핑
-        let model_url = get_model_url(model_name)?;
         let output_file = self.models_path.join(format!("ggml-{}.bin", model_name));
         
         // 모델 디렉토리 생성
@@ -271,6 +269,116 @@ impl WhisperInstaller {
             }).ok();
             return Ok(());
         }
+
+        // 스크립트 기반 다운로드 시도
+        let script_path = self.whisper_repo_path.join("models").join("download-ggml-model.sh");
+        
+        if script_path.exists() {
+            return self.download_model_with_script_progress(model_name, app_handle).await;
+        } else {
+            return self.download_model_with_direct_progress(model_name, app_handle).await;
+        }
+    }
+
+    async fn download_model_with_script_progress(
+        &self,
+        model_name: &str,
+        app_handle: tauri::AppHandle
+    ) -> anyhow::Result<()> {
+        use crate::models::{DownloadProgress, DownloadStatus};
+        
+        let script_path = self.whisper_repo_path.join("models").join("download-ggml-model.sh");
+        
+        // 스크립트 실행 권한 확인 및 설정
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(&script_path)?;
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&script_path, permissions)?;
+        }
+        
+        // 다운로드 시작 알림
+        app_handle.emit_all("download-progress", &DownloadProgress {
+            model_name: model_name.to_string(),
+            progress: 0.0,
+            downloaded_bytes: 0,
+            total_bytes: None,
+            download_speed: None,
+            eta: None,
+            status: DownloadStatus::Starting,
+        }).ok();
+        
+        eprintln!("Starting script-based download for model: {}", model_name);
+        
+        let mut cmd = TokioCommand::new("bash")
+            .args([&script_path.to_string_lossy(), model_name, &self.models_path.to_string_lossy()])
+            .current_dir(&self.whisper_repo_path.join("models"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let model_name_clone = model_name.to_string();
+        let app_handle_stderr = app_handle.clone();
+        
+        // stderr에서 wget 진행률 파싱
+        if let Some(stderr) = cmd.stderr.take() {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    eprintln!("SCRIPT STDERR: '{}'", line);
+                    
+                    if let Some(progress) = parse_wget_progress(&line, &model_name_clone) {
+                        eprintln!("PARSED PROGRESS: {:?}", progress);
+                        app_handle_stderr.emit_all("download-progress", &progress).ok();
+                    }
+                }
+            });
+        }
+
+        let output = cmd.wait_with_output().await?;
+
+        if output.status.success() {
+            // 다운로드 완료
+            app_handle.emit_all("download-progress", &DownloadProgress {
+                model_name: model_name.to_string(),
+                progress: 1.0,
+                downloaded_bytes: 0,
+                total_bytes: None,
+                download_speed: None,
+                eta: None,
+                status: DownloadStatus::Completed,
+            }).ok();
+            Ok(())
+        } else {
+            // 다운로드 실패
+            app_handle.emit_all("download-progress", &DownloadProgress {
+                model_name: model_name.to_string(),
+                progress: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: None,
+                download_speed: None,
+                eta: None,
+                status: DownloadStatus::Failed,
+            }).ok();
+            
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Err(anyhow::anyhow!("Script download failed: {}\n{}", stderr, stdout))
+        }
+    }
+
+    async fn download_model_with_direct_progress(
+        &self,
+        model_name: &str,
+        app_handle: tauri::AppHandle
+    ) -> anyhow::Result<()> {
+        use crate::models::{DownloadProgress, DownloadStatus};
+        
+        // 폴백: 직접 URL로 다운로드 (기존 진행률 파싱 방식)
+        let model_url = get_model_url_dynamic(model_name)?;
+        let output_file = self.models_path.join(format!("ggml-{}.bin", model_name));
 
         // 다운로드 시작 알림
         app_handle.emit_all("download-progress", &DownloadProgress {
