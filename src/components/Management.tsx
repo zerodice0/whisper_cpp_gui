@@ -364,7 +364,8 @@ export const Management: React.FC = React.memo(() => {
               </div>
             );
           })}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* 모델 정보 */}
