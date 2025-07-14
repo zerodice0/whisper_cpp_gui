@@ -214,26 +214,16 @@ export const Output: React.FC = React.memo(() => {
     );
   };
 
-  if (historyData.items.length === 0 && !loading) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">{t('output.title')}</h2>
-          <p className="text-gray-600 mt-1">{t('output.subtitle')}</p>
-        </div>
-
-        <div className="bg-white p-12 rounded-lg shadow text-center">
-          <div className="text-gray-400 mb-4">
-            <DocumentTextIcon className="mx-auto h-16 w-16" />
-          </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">{t('output.noResult')}</h3>
-          <p className="text-gray-500">
-            {t('output.noResultDescription')}
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // 상태 텍스트 반환 (필터용)
+  const getStatusText = (status: string) => {
+    const statusMap = {
+      'Completed': t('output.completed'),
+      'Running': t('output.running'),
+      'Failed': t('output.failed'),
+      'Idle': t('output.idle')
+    };
+    return statusMap[status as keyof typeof statusMap] || status;
+  };
 
   return (
     <div className="space-y-6">
@@ -312,30 +302,106 @@ export const Output: React.FC = React.memo(() => {
         <div className="mt-4 text-sm text-gray-600">
           {t('output.totalItems', { count: historyData.total_count })}
         </div>
+        
+        {/* 활성 필터 표시 */}
+        {(filters.search || filters.modelFilter || filters.formatFilter || filters.statusFilter) && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {filters.search && (
+              <span className="inline-flex items-center px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                검색: "{filters.search}"
+                <button
+                  onClick={() => updateFilter('search', '')}
+                  className="ml-1 text-blue-600 hover:text-blue-800"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {filters.modelFilter && (
+              <span className="inline-flex items-center px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                모델: {filters.modelFilter}
+                <button
+                  onClick={() => updateFilter('modelFilter', '')}
+                  className="ml-1 text-green-600 hover:text-green-800"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {filters.formatFilter && (
+              <span className="inline-flex items-center px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-full">
+                형식: {filters.formatFilter.toUpperCase()}
+                <button
+                  onClick={() => updateFilter('formatFilter', '')}
+                  className="ml-1 text-purple-600 hover:text-purple-800"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {filters.statusFilter && (
+              <span className="inline-flex items-center px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded-full">
+                상태: {getStatusText(filters.statusFilter)}
+                <button
+                  onClick={() => updateFilter('statusFilter', '')}
+                  className="ml-1 text-orange-600 hover:text-orange-800"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            <button
+              onClick={() => setFilters({ search: '', modelFilter: '', formatFilter: '', statusFilter: '' })}
+              className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-full hover:bg-gray-200"
+            >
+              모든 필터 지우기
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* 히스토리 리스트 */}
-      <div className="space-y-4">
-        {historyData.items.map((item) => (
-          <HistoryItem
-            key={item.id}
-            item={item}
-            expanded={expandedItems.has(item.id)}
-            onToggleExpanded={() => toggleExpanded(item.id)}
-            onDownloadFile={downloadFile}
-            onDeleteHistory={deleteHistory}
-            onSaveNotes={saveNotes}
-            editingNotes={editingNotes}
-            setEditingNotes={setEditingNotes}
-            noteText={noteText}
-            setNoteText={setNoteText}
-            formatFileSize={formatFileSize}
-            formatDate={formatDate}
-            formatDuration={formatDuration}
-            getStatusBadge={getStatusBadge}
-          />
-        ))}
-      </div>
+      {/* 히스토리 리스트 또는 빈 상태 */}
+      {historyData.items.length === 0 && !loading ? (
+        <div className="bg-white p-12 rounded-lg shadow text-center">
+          <div className="text-gray-400 mb-4">
+            <DocumentTextIcon className="mx-auto h-16 w-16" />
+          </div>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">
+            {(filters.search || filters.modelFilter || filters.formatFilter || filters.statusFilter) 
+              ? '검색 결과가 없습니다' 
+              : t('output.noResult')
+            }
+          </h3>
+          <p className="text-gray-500">
+            {(filters.search || filters.modelFilter || filters.formatFilter || filters.statusFilter)
+              ? '다른 검색어나 필터를 시도해보세요.'
+              : t('output.noResultDescription')
+            }
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {historyData.items.map((item) => (
+            <HistoryItem
+              key={item.id}
+              item={item}
+              expanded={expandedItems.has(item.id)}
+              onToggleExpanded={() => toggleExpanded(item.id)}
+              onDownloadFile={downloadFile}
+              onDeleteHistory={deleteHistory}
+              onSaveNotes={saveNotes}
+              editingNotes={editingNotes}
+              setEditingNotes={setEditingNotes}
+              noteText={noteText}
+              setNoteText={setNoteText}
+              formatFileSize={formatFileSize}
+              formatDate={formatDate}
+              formatDuration={formatDuration}
+              getStatusBadge={getStatusBadge}
+            />
+          ))}
+        </div>
+      )}
 
       {/* 더 보기 버튼 */}
       {historyData.has_more && (
