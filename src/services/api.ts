@@ -25,6 +25,16 @@ export interface WhisperConfig {
   options: Record<string, string>;
 }
 
+export interface DownloadProgress {
+  model_name: string;
+  progress: number;          // 0.0 ~ 1.0
+  downloaded_bytes: number;
+  total_bytes?: number;
+  download_speed?: string;
+  eta?: string;
+  status: 'Starting' | 'Downloading' | 'Completed' | 'Failed' | 'Cancelled';
+}
+
 export const whisperApi = {
   async checkInstallation(): Promise<boolean> {
     return invoke('check_whisper_installation');
@@ -76,5 +86,13 @@ export const whisperApi = {
 
   async startTranscriptionWithOptions(config: WhisperConfig): Promise<string> {
     return invoke('start_transcription_with_options', { config });
+  },
+
+  async downloadModelWithProgress(modelName: string): Promise<string> {
+    return invoke('download_model_with_progress', { modelName });
+  },
+
+  async deleteModel(modelName: string): Promise<string> {
+    return invoke('delete_model', { modelName });
   },
 };

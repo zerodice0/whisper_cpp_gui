@@ -64,7 +64,14 @@ impl WhisperService {
             while let Some(entry) = dir.next_entry().await? {
                 if let Some(name) = entry.file_name().to_str() {
                     if name.ends_with(".bin") {
-                        models.push(name.trim_end_matches(".bin").to_string());
+                        let file_name = name.trim_end_matches(".bin");
+                        // ggml- 접두사를 제거하여 표준 모델명으로 변환
+                        if let Some(model_name) = file_name.strip_prefix("ggml-") {
+                            models.push(model_name.to_string());
+                        } else {
+                            // ggml- 접두사가 없는 경우 그대로 사용
+                            models.push(file_name.to_string());
+                        }
                     }
                 }
             }
@@ -75,6 +82,26 @@ impl WhisperService {
 
     pub async fn download_official_model(&self, model_name: &str) -> anyhow::Result<()> {
         self.installer.download_model(model_name).await
+    }
+
+    pub async fn download_model_with_progress(&self, model_name: &str, app_handle: tauri::AppHandle) -> anyhow::Result<()> {
+        self.installer.download_model_with_progress(model_name, app_handle).await
+    }
+
+    pub async fn is_model_downloaded(&self, model_name: &str) -> bool {
+        let model_path = self.models_path.join(format!("ggml-{}.bin", model_name));
+        model_path.exists()
+    }
+
+    pub async fn delete_model(&self, model_name: &str) -> anyhow::Result<()> {
+        let model_path = self.models_path.join(format!("ggml-{}.bin", model_name));
+        
+        if !model_path.exists() {
+            return Err(anyhow::anyhow!("Model not found: {}", model_name));
+        }
+
+        tokio::fs::remove_file(&model_path).await?;
+        Ok(())
     }
 
     pub async fn start_transcription_with_streaming(

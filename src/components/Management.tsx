@@ -1,40 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { whisperApi } from '../services/api';
+import { listen } from '@tauri-apps/api/event';
+import { whisperApi, DownloadProgress } from '../services/api';
+import { DeleteModelModal } from './DeleteModelModal';
 
 export const Management: React.FC = React.memo(() => {
   const { t } = useTranslation();
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
   const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
-  const [downloadLogs, setDownloadLogs] = useState<Record<string, string[]>>({});
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [modelToDelete, setModelToDelete] = useState<string>('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const modelSizes = {
-    'tiny': '39 MB',
-    'tiny.en': '39 MB',
-    'base': '142 MB',
-    'base.en': '142 MB',
-    'small': '466 MB',
-    'small.en': '466 MB',
-    'medium': '1.5 GB',
-    'medium.en': '1.5 GB',
-    'large-v1': '2.9 GB',
-    'large-v2': '2.9 GB',
-    'large-v3': '2.9 GB',
+  const getModelSize = (model: string) => {
+    return t(`management.modelSizes.${model}`, { defaultValue: t('common.unknownSize') });
   };
 
-  const modelDescriptions = {
-    'tiny': '가장 빠르지만 정확도가 낮음',
-    'tiny.en': 'Tiny 모델 (영어 전용)',
-    'base': '속도와 정확도의 균형',
-    'base.en': 'Base 모델 (영어 전용)',
-    'small': '좋은 정확도, 적당한 속도',
-    'small.en': 'Small 모델 (영어 전용)',
-    'medium': '높은 정확도, 느린 속도',
-    'medium.en': 'Medium 모델 (영어 전용)',
-    'large-v1': '최고 정확도 (구 버전)',
-    'large-v2': '최고 정확도 (개선 버전)',
-    'large-v3': '최신 최고 정확도 모델',
+  const getModelDescription = (model: string) => {
+    return t(`management.modelDescriptions.${model}`, { defaultValue: t('common.noDescription') });
   };
 
   const loadModels = async () => {
@@ -52,23 +37,20 @@ export const Management: React.FC = React.memo(() => {
 
   const downloadModel = async (modelName: string) => {
     setDownloadingModels(prev => new Set([...prev, modelName]));
-    setDownloadLogs(prev => ({ ...prev, [modelName]: [`모델 ${modelName} 다운로드를 시작합니다...`] }));
 
     try {
-      const result = await whisperApi.downloadModel(modelName);
-      setDownloadLogs(prev => ({ 
-        ...prev, 
-        [modelName]: [...(prev[modelName] || []), `✅ ${result}`] 
-      }));
-      
-      // 다운로드된 모델 목록 새로고침
-      await loadModels();
+      await whisperApi.downloadModelWithProgress(modelName);
     } catch (error) {
-      setDownloadLogs(prev => ({ 
-        ...prev, 
-        [modelName]: [...(prev[modelName] || []), `❌ 다운로드 실패: ${(error as Error).message}`] 
+      console.error('Download failed:', error);
+      setDownloadProgress(prev => ({
+        ...prev,
+        [modelName]: {
+          model_name: modelName,
+          progress: 0,
+          downloaded_bytes: 0,
+          status: 'Failed'
+        }
       }));
-    } finally {
       setDownloadingModels(prev => {
         const newSet = new Set(prev);
         newSet.delete(modelName);
@@ -77,8 +59,69 @@ export const Management: React.FC = React.memo(() => {
     }
   };
 
+  const handleDeleteModel = (modelName: string) => {
+    setModelToDelete(modelName);
+    setDeleteModalOpen(true);
+  };
+
+  const confirmDeleteModel = async () => {
+    setIsDeleting(true);
+    try {
+      await whisperApi.deleteModel(modelToDelete);
+      setDeleteModalOpen(false);
+      setModelToDelete('');
+      // 모델 목록 새로고침
+      loadModels();
+      console.log(t('management.deleteSuccess'));
+    } catch (error) {
+      console.error('Delete failed:', error);
+      console.log(t('management.deleteFailed'));
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const cancelDeleteModel = () => {
+    setDeleteModalOpen(false);
+    setModelToDelete('');
+  };
+
   useEffect(() => {
     loadModels();
+    
+    // 다운로드 진행률 이벤트 리스너 설정
+    const setupListeners = async () => {
+      const progressUnlisten = await listen<DownloadProgress>('download-progress', (event) => {
+        const progress = event.payload;
+        setDownloadProgress(prev => ({
+          ...prev,
+          [progress.model_name]: progress
+        }));
+
+        // 다운로드 완료 시 처리
+        if (progress.status === 'Completed') {
+          setDownloadingModels(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(progress.model_name);
+            return newSet;
+          });
+          // 모델 목록 새로고침
+          loadModels();
+        } else if (progress.status === 'Failed') {
+          setDownloadingModels(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(progress.model_name);
+            return newSet;
+          });
+        }
+      });
+
+      return () => {
+        progressUnlisten();
+      };
+    };
+
+    setupListeners();
   }, []);
 
   return (
@@ -108,12 +151,18 @@ export const Management: React.FC = React.memo(() => {
                     {t('dashboard.installed')}
                   </span>
                 </div>
-                <p className="text-sm text-green-700">
-                  {modelDescriptions[model as keyof typeof modelDescriptions] || '설명 없음'}
+                <p className="text-sm text-green-700 mb-3">
+                  {getModelDescription(model)}
                 </p>
-                <p className="text-xs text-green-600 mt-1">
-                  크기: {modelSizes[model as keyof typeof modelSizes] || '알 수 없음'}
+                <p className="text-xs text-green-600 mb-3">
+                  {t('common.size')}: {getModelSize(model)}
                 </p>
+                <button
+                  onClick={() => handleDeleteModel(model)}
+                  className="w-full px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                >
+                  {t('management.deleteModel')}
+                </button>
               </div>
             ))}
           </div>
@@ -122,12 +171,13 @@ export const Management: React.FC = React.memo(() => {
 
       {/* 사용 가능한 모델 */}
       <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">사용 가능한 모델</h3>
+        <h3 className="text-lg font-medium text-gray-900 mb-4">{t('management.availableModels')}</h3>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {availableModels.map((model) => {
             const isDownloaded = downloadedModels.includes(model);
             const isDownloading = downloadingModels.has(model);
+            const progress = downloadProgress[model];
             
             return (
               <div key={model} className={`border p-4 rounded-lg ${
@@ -142,13 +192,42 @@ export const Management: React.FC = React.memo(() => {
                       ? 'text-green-600 bg-green-100'
                       : 'text-blue-600 bg-blue-100'
                   }`}>
-                    {modelSizes[model as keyof typeof modelSizes] || '알 수 없음'}
+                    {getModelSize(model)}
                   </span>
                 </div>
                 
                 <p className={`text-sm mb-3 ${isDownloaded ? 'text-green-700' : 'text-gray-600'}`}>
-                  {modelDescriptions[model as keyof typeof modelDescriptions] || '설명 없음'}
+                  {getModelDescription(model)}
                 </p>
+                
+                {/* 다운로드 진행률 표시 */}
+                {isDownloading && progress && (
+                  <div className="mb-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-600">
+                        {progress.status === 'Starting' && t('download.starting')}
+                        {progress.status === 'Downloading' && t('download.downloading')}
+                        {progress.status === 'Completed' && t('common.completed')}
+                        {progress.status === 'Failed' && t('common.failed')}
+                      </span>
+                      <span className="font-medium text-blue-600">
+                        {Math.round(progress.progress * 100)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div 
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${progress.progress * 100}%` }}
+                      />
+                    </div>
+                    {progress.download_speed && (
+                      <div className="text-xs text-gray-500">
+                        {t('download.speed', { speed: progress.download_speed })}
+                        {progress.eta && ` • ${t('download.eta', { eta: progress.eta })}`}
+                      </div>
+                    )}
+                  </div>
+                )}
                 
                 <button
                   onClick={() => downloadModel(model)}
@@ -161,14 +240,13 @@ export const Management: React.FC = React.memo(() => {
                         : 'bg-blue-600 text-white hover:bg-blue-700'
                   }`}
                 >
-                  {isDownloaded ? '설치됨' : isDownloading ? '다운로드 중...' : '다운로드'}
+                  {isDownloaded ? t('common.installed') : isDownloading ? t('download.downloading') : t('common.download')}
                 </button>
                 
-                {downloadLogs[model] && (
-                  <div className="mt-3 p-2 bg-gray-50 rounded text-xs">
-                    {downloadLogs[model].map((log, index) => (
-                      <div key={index} className="text-gray-600">{log}</div>
-                    ))}
+                {/* 다운로드 상태 메시지 */}
+                {progress && progress.status === 'Failed' && (
+                  <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-600">
+                    ❌ {t('download.failedRetry')}
                   </div>
                 )}
               </div>
@@ -179,14 +257,23 @@ export const Management: React.FC = React.memo(() => {
 
       {/* 모델 정보 */}
       <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
-        <h4 className="text-blue-900 font-medium mb-2">모델 선택 가이드</h4>
+        <h4 className="text-blue-900 font-medium mb-2">{t('management.modelSelectionGuide')}</h4>
         <div className="text-blue-800 text-sm space-y-2">
-          <p><strong>처음 사용자:</strong> base 모델 권장 (속도와 정확도의 균형)</p>
-          <p><strong>빠른 처리:</strong> tiny 또는 small 모델</p>
-          <p><strong>최고 품질:</strong> large-v3 모델 (느리지만 가장 정확)</p>
-          <p><strong>영어만:</strong> .en 버전이 해당 언어에서 더 나은 성능</p>
+          <p>{t('management.guideFirstTime')}</p>
+          <p>{t('management.guideFastProcessing')}</p>
+          <p>{t('management.guideBestQuality')}</p>
+          <p>{t('management.guideEnglishOnly')}</p>
         </div>
       </div>
+
+      {/* 삭제 확인 모달 */}
+      <DeleteModelModal
+        isOpen={deleteModalOpen}
+        modelName={modelToDelete}
+        onConfirm={confirmDeleteModel}
+        onCancel={cancelDeleteModel}
+        isDeleting={isDeleting}
+      />
     </div>
   );
 });

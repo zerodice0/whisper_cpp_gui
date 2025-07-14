@@ -172,3 +172,106 @@ pub async fn download_official_model(&self, model_name: &str) -> Result<()> {
 - [ ] 순수함수 기반 상태 관리
 - [ ] 모든 사이드 이펙트 명시적 분리
 - [ ] 불변성 기반 데이터 구조
+
+## 다국어 지원 가이드라인
+
+### 1. 텍스트 하드코딩 금지
+모든 사용자에게 표시되는 텍스트는 반드시 i18n 키를 사용해야 합니다.
+
+**❌ 잘못된 예시:**
+```javascript
+// 하드코딩된 한글 텍스트
+<button>다운로드</button>
+<p>모델을 다운로드하는 중...</p>
+```
+
+**✅ 올바른 예시:**
+```javascript
+// i18n 키 사용
+<button>{t('common.download')}</button>
+<p>{t('download.inProgress')}</p>
+```
+
+### 2. i18n 키 네이밍 규칙
+- **계층 구조**: `category.subcategory.key` 형식
+- **케밥 케이스**: 소문자와 하이픈 사용
+- **의미 명확성**: 키 이름만 보고도 용도를 알 수 있게
+
+**키 카테고리:**
+```
+common.*          # 공통 텍스트 (버튼, 상태 등)
+dashboard.*       # 대시보드 관련
+management.*      # 모델 관리 관련
+transcription.*   # 음성 변환 관련
+download.*        # 다운로드 관련
+setup.*          # 설정/설치 관련
+export.*         # 내보내기 관련
+error.*          # 에러 메시지
+validation.*     # 검증 메시지
+```
+
+### 3. 번역 파일 구조
+```javascript
+// src/i18n/locales/ko.json
+{
+  "common": {
+    "download": "다운로드",
+    "cancel": "취소",
+    "retry": "다시 시도",
+    "complete": "완료",
+    "failed": "실패",
+    "inProgress": "진행 중..."
+  },
+  "download": {
+    "starting": "시작 중...",
+    "downloading": "다운로드 중...",
+    "completed": "다운로드 완료",
+    "failed": "다운로드 실패",
+    "speed": "속도: {{speed}}",
+    "eta": "남은 시간: {{eta}}"
+  }
+}
+```
+
+### 4. 동적 텍스트 처리
+변수를 포함한 텍스트는 interpolation을 사용합니다.
+
+```javascript
+// 변수 포함
+t('download.progress', { percentage: 75 })
+// "다운로드 진행률: 75%"
+
+// 복수형 처리
+t('management.modelsCount', { count: 3 })
+// "3개의 모델"
+```
+
+### 5. Rust 백엔드 메시지
+Rust에서 생성되는 메시지도 가능한 한 프론트엔드에서 번역하도록 구조화합니다.
+
+```rust
+// 에러 코드 반환
+return Err(anyhow::anyhow!("MODEL_NOT_FOUND"));
+
+// 프론트엔드에서 번역
+if (error.message === "MODEL_NOT_FOUND") {
+  setError(t('error.modelNotFound'));
+}
+```
+
+### 6. 새 기능 추가 시 체크리스트
+- [ ] 모든 텍스트가 i18n 키를 사용하는가?
+- [ ] 새로운 키가 번역 파일에 추가되었는가?
+- [ ] 키 네이밍이 규칙에 맞는가?
+- [ ] 동적 텍스트에 interpolation을 사용했는가?
+- [ ] 에러 메시지가 번역 가능한 형태인가?
+
+### 7. 지원 언어
+- **기본**: 한국어 (ko)
+- **추가 예정**: 영어 (en), 일본어 (ja)
+
+### 8. 코드 리뷰 시 확인사항
+- 하드코딩된 텍스트가 있는지 확인
+- i18n 키가 의미있는 이름인지 확인
+- 번역 파일이 업데이트되었는지 확인
+- 다국어 테스트가 필요한지 판단

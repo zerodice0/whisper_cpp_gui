@@ -171,3 +171,26 @@ pub async fn start_transcription_with_options(
         .map_err(|e| e.to_string())?;
     Ok("Transcription started with options".to_string())
 }
+
+#[tauri::command]
+pub async fn download_model_with_progress(
+    model_name: String,
+    app_handle: AppHandle,
+    service: State<'_, WhisperServiceState>
+) -> Result<String, String> {
+    let service = service.lock().await;
+    service.download_model_with_progress(&model_name, app_handle).await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Model {} download started", model_name))
+}
+
+#[tauri::command]
+pub async fn delete_model(
+    model_name: String,
+    service: State<'_, WhisperServiceState>
+) -> Result<String, String> {
+    let service = service.lock().await;
+    service.delete_model(&model_name).await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Model {} deleted successfully", model_name))
+}

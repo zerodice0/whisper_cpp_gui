@@ -76,3 +76,23 @@ pub struct WhisperConfig {
     pub input_file: String,
     pub options: std::collections::HashMap<String, String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadProgress {
+    pub model_name: String,
+    pub progress: f32,          // 0.0 ~ 1.0
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub download_speed: Option<String>,
+    pub eta: Option<String>,
+    pub status: DownloadStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadStatus {
+    Starting,
+    Downloading,
+    Completed,
+    Failed,
+    Cancelled,
+}

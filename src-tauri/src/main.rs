@@ -27,12 +27,14 @@ async fn main() {
             list_available_models,
             list_downloaded_models,
             download_model,
+            delete_model,
             start_transcription,
             read_transcription_result,
             export_to_srt,
             export_to_fcpxml,
             get_whisper_options,
-            start_transcription_with_options
+            start_transcription_with_options,
+            download_model_with_progress
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

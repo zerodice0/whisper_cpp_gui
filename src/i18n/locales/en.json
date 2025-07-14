@@ -80,13 +80,13 @@
       "tiny.en": "39 MB", 
       "base": "142 MB",
       "base.en": "142 MB",
-      "small": "244 MB",
-      "small.en": "244 MB",
-      "medium": "769 MB",
-      "medium.en": "769 MB",
-      "large-v1": "1550 MB",
-      "large-v2": "1550 MB", 
-      "large-v3": "1550 MB"
+      "small": "466 MB",
+      "small.en": "466 MB",
+      "medium": "1.5 GB",
+      "medium.en": "1.5 GB",
+      "large-v1": "2.9 GB",
+      "large-v2": "2.9 GB", 
+      "large-v3": "2.9 GB"
     },
     "modelDescriptions": {
       "tiny": "Fastest but lowest accuracy",
@@ -110,7 +110,12 @@
     "guideFirstTime": "First-time users: base model recommended (balance of speed and accuracy)",
     "guideFastProcessing": "Fast processing: tiny or small models",
     "guideBestQuality": "Best quality: large-v3 model (slow but most accurate)",
-    "guideEnglishOnly": "English only: .en versions perform better for English"
+    "guideEnglishOnly": "English only: .en versions perform better for English",
+    "deleteModel": "Delete Model",
+    "deleteModelConfirm": "Are you sure you want to delete this model?",
+    "deleteModelDescription": "Deleting the '{{modelName}}' model cannot be undone. Do you want to continue?",
+    "deleteSuccess": "Model deleted successfully",
+    "deleteFailed": "Failed to delete model"
   },
   "transcription": {
     "title": "Audio Transcription",
@@ -170,7 +175,25 @@
     "next": "Next",
     "finish": "Finish",
     "retry": "Retry",
-    "language": "Language"
+    "language": "Language",
+    "download": "Download",
+    "installed": "Installed",
+    "installing": "Installing...",
+    "completed": "Completed",
+    "failed": "Failed",
+    "inProgress": "In Progress...",
+    "noDescription": "No description",
+    "unknownSize": "Unknown size",
+    "size": "Size"
+  },
+  "download": {
+    "starting": "Starting...",
+    "downloading": "Downloading...",
+    "completed": "Download completed",
+    "failed": "Download failed",
+    "failedRetry": "Download failed. Please try again.",
+    "speed": "Speed: {{speed}}",
+    "eta": "ETA: {{eta}}"
   },
   "messages": {
     "installationFailed": "❌ Installation failed:",
