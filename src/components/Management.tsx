@@ -201,26 +201,27 @@ export const Management: React.FC = React.memo(() => {
                 </p>
                 
                 {/* 다운로드 진행률 표시 */}
-                {isDownloading && progress && (
+                {isDownloading && (
                   <div className="mb-3 space-y-2">
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-gray-600">
-                        {progress.status === 'Starting' && t('download.starting')}
-                        {progress.status === 'Downloading' && t('download.downloading')}
-                        {progress.status === 'Completed' && t('common.completed')}
-                        {progress.status === 'Failed' && t('common.failed')}
+                        {progress?.status === 'Starting' && t('download.starting')}
+                        {progress?.status === 'Downloading' && t('download.downloading')}
+                        {progress?.status === 'Completed' && t('common.completed')}
+                        {progress?.status === 'Failed' && t('common.failed')}
+                        {!progress && t('download.downloading')}
                       </span>
                       <span className="font-medium text-blue-600">
-                        {Math.round(progress.progress * 100)}%
+                        {progress ? Math.round(Math.min(progress.progress, 1.0) * 100) : 0}%
                       </span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
                       <div 
                         className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${progress.progress * 100}%` }}
+                        style={{ width: `${progress ? Math.min(progress.progress, 1.0) * 100 : 0}%` }}
                       />
                     </div>
-                    {progress.download_speed && (
+                    {progress?.download_speed && (
                       <div className="text-xs text-gray-500">
                         {t('download.speed', { speed: progress.download_speed })}
                         {progress.eta && ` • ${t('download.eta', { eta: progress.eta })}`}

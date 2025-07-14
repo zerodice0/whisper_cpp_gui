@@ -227,13 +227,12 @@ impl WhisperInstaller {
             status: DownloadStatus::Starting,
         }).ok();
 
-        // curl 명령어로 다운로드 (진행률 표시 포함)
-        let mut cmd = TokioCommand::new("curl")
+        // wget 명령어로 다운로드 (실시간 진행률 파싱)
+        let mut cmd = TokioCommand::new("wget")
             .args([
-                "-L",  // 리다이렉트 따라가기
-                "-#",  // 진행률 바 표시
-                "--progress-bar",
-                "-o", &output_file.to_string_lossy(),
+                "--progress=dot:giga",   // 더 자주 업데이트되는 dot 형식 사용
+                "--show-progress",       // 진행률 표시
+                "-O", &output_file.to_string_lossy(),
                 &model_url
             ])
             .stdout(Stdio::piped())
@@ -243,19 +242,44 @@ impl WhisperInstaller {
         let model_name_clone = model_name.to_string();
         let app_handle_stderr = app_handle.clone();
         
-        // stderr에서 진행률 파싱
+        // wget 진행률 파싱이 활성화되었는지 추적하기 위한 공유 상태
+        let wget_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let wget_active_clone = wget_active.clone();
+
+        // stderr에서 wget 진행률 파싱
         if let Some(stderr) = cmd.stderr.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(progress) = parse_curl_progress(&line, &model_name_clone) {
+                    // 모든 wget 출력 디버깅
+                    eprintln!("WGET STDERR: '{}'", line);
+                    
+                    if let Some(progress) = parse_wget_progress(&line, &model_name_clone) {
+                        eprintln!("PARSED PROGRESS: {:?}", progress);
+                        
+                        // wget 파싱이 활성화됨을 표시
+                        wget_active_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+                        
                         app_handle_stderr.emit_all("download-progress", &progress).ok();
                     }
                 }
             });
         }
 
+        // wget 파싱이 잘 작동하므로 파일 크기 모니터링 임시 비활성화
+        // (필요시 나중에 활성화 가능)
+        let size_monitor = tokio::spawn(async move {
+            // 빈 태스크 - wget 파싱만 사용
+            eprintln!("FILE SIZE MONITORING DISABLED - USING WGET PARSING ONLY");
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
+        });
+
         let output = cmd.wait_with_output().await?;
+        
+        // 파일 크기 모니터링 중단
+        size_monitor.abort();
 
         if output.status.success() {
             // 다운로드 완료
@@ -314,68 +338,184 @@ fn get_model_url(model_name: &str) -> anyhow::Result<String> {
     Ok(url)
 }
 
-fn parse_curl_progress(line: &str, model_name: &str) -> Option<crate::models::DownloadProgress> {
-    use crate::models::{DownloadProgress, DownloadStatus};
+async fn get_remote_file_size(url: &str) -> anyhow::Result<u64> {
+    // wget을 사용하여 파일 크기 확인
+    let output = TokioCommand::new("wget")
+        .args([
+            "--spider",           // 파일을 다운로드하지 않고 헤더만 확인
+            "--server-response",  // 서버 응답 헤더 표시
+            url
+        ])
+        .output()
+        .await?;
+
+    // wget은 헤더 정보를 stderr에 출력
+    let stderr_output = String::from_utf8_lossy(&output.stderr);
     
-    // curl의 progress bar 출력 파싱
-    // 예시: "######################################################################## 100.0%"
-    if line.contains('%') {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if let Some(percentage_str) = parts.iter().find(|s| s.contains('%')) {
-            if let Ok(percentage) = percentage_str.trim_end_matches('%').parse::<f32>() {
-                return Some(DownloadProgress {
-                    model_name: model_name.to_string(),
-                    progress: percentage / 100.0,
-                    downloaded_bytes: 0,
-                    total_bytes: None,
-                    download_speed: None,
-                    eta: None,
-                    status: if percentage >= 100.0 { 
-                        DownloadStatus::Completed 
-                    } else { 
-                        DownloadStatus::Downloading 
-                    },
-                });
+    let mut last_content_length = None;
+    
+    // Content-Length 헤더 찾기
+    for line in stderr_output.lines() {
+        if line.to_lowercase().contains("content-length:") {
+            if let Some(size_str) = line.split(':').nth(1) {
+                if let Ok(size) = size_str.trim().parse::<u64>() {
+                    last_content_length = Some(size);
+                }
             }
         }
     }
     
-    // wget 스타일 출력도 파싱 (백업용)
-    // 예시: "50% [======>     ] 1,234,567  123KB/s  eta 2m 30s"
-    if line.contains('[') && line.contains(']') && line.contains('%') {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if let Some(percentage_str) = parts.first() {
-            if let Ok(percentage) = percentage_str.trim_end_matches('%').parse::<f32>() {
-                let download_speed = parts.iter()
-                    .find(|s| s.contains("B/s"))
-                    .map(|s| s.to_string());
-                
-                let eta = if let Some(eta_idx) = parts.iter().position(|&s| s == "eta") {
-                    if eta_idx + 1 < parts.len() {
-                        Some(parts[eta_idx + 1..].join(" "))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                
-                return Some(DownloadProgress {
-                    model_name: model_name.to_string(),
-                    progress: percentage / 100.0,
-                    downloaded_bytes: 0,
-                    total_bytes: None,
-                    download_speed,
-                    eta,
-                    status: if percentage >= 100.0 { 
-                        DownloadStatus::Completed 
-                    } else { 
-                        DownloadStatus::Downloading 
-                    },
-                });
+    if let Some(size) = last_content_length {
+        return Ok(size);
+    }
+    
+    Err(anyhow::anyhow!("Could not determine file size"))
+}
+
+fn get_expected_model_size(model_name: &str) -> u64 {
+    // 예상 모델 크기 (바이트 단위)
+    match model_name {
+        "tiny" | "tiny.en" => 39 * 1024 * 1024,           // 39 MB
+        "base" | "base.en" => 142 * 1024 * 1024,          // 142 MB
+        "small" | "small.en" => 466 * 1024 * 1024,        // 466 MB
+        "medium" | "medium.en" => 1500 * 1024 * 1024,     // 1.5 GB
+        "large-v1" | "large-v2" | "large-v3" => 2900 * 1024 * 1024, // 2.9 GB
+        _ => 1000 * 1024 * 1024, // 기본값 1GB
+    }
+}
+
+fn parse_wget_progress(line: &str, model_name: &str) -> Option<crate::models::DownloadProgress> {
+    use crate::models::{DownloadProgress, DownloadStatus};
+    
+    // wget 진행률 출력 파싱
+    // 다양한 형식 지원:
+    // 1. Bar 형식: "test_download        95%[==================> ]  46.72K   491 B/s    약 5s"
+    // 2. Dot 형식: "     0K .......... .......... .......... .......... ..........  0%  491K 5s"
+    // 3. Show-progress 형식: "46,720K  .......... .......... .......... .......... ..........  95%  491K 5s"
+    
+    // 모든 wget 출력을 더 자세히 디버깅
+    eprintln!("WGET LINE ANALYSIS: '{}'", line);
+    
+    // 패턴 1: 퍼센티지 찾기 (95%, 100% 등)
+    if let Some(percent_pos) = line.find('%') {
+        // 퍼센티지 앞의 숫자 찾기
+        let before_percent = &line[..percent_pos];
+        
+        // 여러 패턴으로 퍼센티지 추출 시도
+        let percentage = if let Some(last_space) = before_percent.rfind(' ') {
+            // 공백으로 구분된 경우
+            before_percent[last_space + 1..].parse::<f32>().ok()
+        } else if let Some(last_bracket) = before_percent.rfind(']') {
+            // 대괄호 다음에 오는 경우
+            before_percent[last_bracket + 1..].trim().parse::<f32>().ok()
+        } else {
+            // 직접 파싱 시도
+            before_percent.trim().parse::<f32>().ok()
+        };
+        
+        if let Some(percentage) = percentage {
+            let progress = percentage / 100.0;
+            
+            eprintln!("FOUND PERCENTAGE: {}% -> progress: {}", percentage, progress);
+            
+            // 다운로드 속도 파싱 (K/s, M/s, B/s 등)
+            let download_speed = extract_speed_from_line(line);
+            
+            // ETA 파싱 (초 단위)
+            let eta = extract_eta_from_line(line);
+            
+            // 다운로드된 크기 파싱
+            let downloaded_bytes = parse_size_from_line(line);
+            
+            return Some(DownloadProgress {
+                model_name: model_name.to_string(),
+                progress,
+                downloaded_bytes,
+                total_bytes: None,
+                download_speed,
+                eta,
+                status: if progress >= 1.0 { 
+                    DownloadStatus::Completed 
+                } else { 
+                    DownloadStatus::Downloading 
+                },
+            });
+        }
+    }
+    
+    // 패턴 2: "received/total" 형식 파싱 (일부 wget 버전에서 사용)
+    if line.contains("received") || line.contains("saved") {
+        eprintln!("FOUND RECEIVED/SAVED PATTERN: {}", line);
+        // 이 경우에도 파싱 로직 추가 가능
+    }
+    
+    None
+}
+
+fn extract_speed_from_line(line: &str) -> Option<String> {
+    // 속도 패턴 찾기: "491K", "1.2M", "500B" 등 뒤에 "/s" 또는 단독으로
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    
+    for (i, part) in parts.iter().enumerate() {
+        // "K/s", "M/s", "B/s" 형태
+        if part.ends_with("K/s") || part.ends_with("M/s") || part.ends_with("B/s") {
+            return Some(part.to_string());
+        }
+        // "K", "M" 뒤에 "/s"가 올 수 있음
+        if (part.ends_with('K') || part.ends_with('M')) && i + 1 < parts.len() {
+            if parts[i + 1] == "/s" || parts[i + 1].starts_with("/") {
+                return Some(format!("{}/s", part));
+            }
+        }
+        // 단독 "K", "M" 형태 (wget dot 형식에서 자주 보임)
+        if part.ends_with('K') || part.ends_with('M') {
+            // 숫자로 시작하는지 확인
+            if part.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                return Some(format!("{}/s", part));
             }
         }
     }
     
     None
+}
+
+fn extract_eta_from_line(line: &str) -> Option<String> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    
+    // 마지막 부분에서 시간 형식 찾기 ("5s", "1m", "10m", "1h2m" 등)
+    for part in parts.iter().rev() {
+        if part.ends_with('s') || part.ends_with('m') || part.ends_with('h') {
+            if part.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                return Some(part.to_string());
+            }
+        }
+    }
+    
+    None
+}
+
+fn parse_size_from_line(line: &str) -> u64 {
+    // 크기 표시를 찾기 (예: "46.72K", "1.2M", "1234")
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    
+    for part in parts.iter() {
+        if part.ends_with('K') || part.ends_with('M') || part.ends_with('G') {
+            if let Ok(num) = part[..part.len()-1].parse::<f64>() {
+                let multiplier = match part.chars().last() {
+                    Some('K') => 1024,
+                    Some('M') => 1024 * 1024,
+                    Some('G') => 1024 * 1024 * 1024,
+                    _ => 1,
+                };
+                return (num * multiplier as f64) as u64;
+            }
+        } else if let Ok(num) = part.parse::<u64>() {
+            // 일반 숫자인 경우
+            if num > 1000 { // 바이트 크기로 추정되는 큰 숫자
+                return num;
+            }
+        }
+    }
+    
+    0
 }
