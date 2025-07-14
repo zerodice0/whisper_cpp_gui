@@ -1146,6 +1146,27 @@ fn add_default_options(options: &mut Vec<WhisperOption>) {
 }
 
 pub fn parse_whisper_output_line(line: &str) -> Option<ProgressInfo> {
+    // whisper.cpp 타임스탬프 진행률 파싱 (예: [00:01:23.456 --> 00:01:25.789])
+    if line.contains("[") && line.contains("-->") && line.contains("]") {
+        if let Some(start) = line.find("[") {
+            if let Some(arrow_pos) = line.find("-->") {
+                if let Some(_end) = line.find("]") {
+                    let timestamp_part = &line[start+1..arrow_pos].trim();
+                    if let Some(time_seconds) = parse_timestamp_to_seconds(timestamp_part) {
+                        // 임시로 시간을 기반으로 진행률 추정 (최대 300초 기준)
+                        let estimated_progress = (time_seconds / 300.0).min(1.0);
+                        return Some(ProgressInfo {
+                            progress: estimated_progress,
+                            current_time: Some(time_seconds),
+                            message: line.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    
+    // 기존 백분율 기반 파싱
     if line.contains("[") && line.contains("]") && line.contains("%") {
         if let Some(start) = line.find("[") {
             if let Some(end) = line.find("]") {
@@ -1161,13 +1182,35 @@ pub fn parse_whisper_output_line(line: &str) -> Option<ProgressInfo> {
         }
     }
     
-    if line.contains("whisper_print_timings") {
+    // 완료 시그널 감지
+    if line.contains("whisper_print_timings") || line.contains("total time") {
         return Some(ProgressInfo {
             progress: 1.0,
             current_time: None,
-            message: "Processing complete".to_string(),
+            message: "처리 완료".to_string(),
         });
     }
     
+    // 시작 시그널 감지  
+    if line.contains("whisper_init_from_file") || line.contains("loading model") {
+        return Some(ProgressInfo {
+            progress: 0.1,
+            current_time: None,
+            message: "모델 로딩 중...".to_string(),
+        });
+    }
+    
+    None
+}
+
+fn parse_timestamp_to_seconds(timestamp: &str) -> Option<f32> {
+    // 타임스탬프 형식: "00:01:23.456" → 초 단위로 변환
+    let parts: Vec<&str> = timestamp.split(':').collect();
+    if parts.len() == 3 {
+        if let (Ok(hours), Ok(minutes), Ok(seconds)) = 
+            (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+            return Some(hours * 3600.0 + minutes * 60.0 + seconds);
+        }
+    }
     None
 }

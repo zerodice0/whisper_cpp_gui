@@ -134,6 +134,8 @@
     "fileSize": "파일 크기:",
     "transcriptionProgress": "음성 인식 진행률",
     "transcriptionLog": "음성 인식 로그",
+    "liveLog": "실시간 로그",
+    "scrollToBottom": "맨 아래로",
     "noModelSelected": "먼저 모델을 선택해주세요",
     "noFileSelected": "먼저 오디오 파일을 선택해주세요",
     "modelNotDownloaded": "선택한 모델이 다운로드되지 않았습니다. Management 탭에서 먼저 다운로드해주세요.",

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/api/dialog';
 import { listen } from '@tauri-apps/api/event';
@@ -27,6 +27,25 @@ export const Transcription: React.FC = React.memo(() => {
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [whisperOptions, setWhisperOptions] = useState<WhisperOptions | null>(null);
   const [config, setConfig] = useState<Partial<WhisperConfig>>({});
+  
+  // 로그 컨테이너 참조
+  const logContainerRef = useRef<HTMLDivElement>(null);
+  const logContentRef = useRef<HTMLDivElement>(null);
+
+  // 자동 스크롤 함수
+  const scrollToBottom = () => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  };
+
+  // 로그가 변경될 때마다 자동 스크롤
+  useEffect(() => {
+    if (state.logs.length > 0) {
+      // 약간의 지연을 두어 DOM 업데이트 후 스크롤
+      setTimeout(scrollToBottom, 50);
+    }
+  }, [state.logs]);
 
   const loadModels = async () => {
     try {
@@ -316,11 +335,30 @@ export const Transcription: React.FC = React.memo(() => {
       {/* 실시간 로그 */}
       {state.logs.length > 0 && (
         <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">{t('transcription.transcriptionLog')}</h3>
-          <div className="bg-gray-50 p-4 rounded-md max-h-64 overflow-y-auto">
-            <div className="font-mono text-sm space-y-1">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-medium text-gray-900">{t('transcription.transcriptionLog')}</h3>
+            <div className="flex items-center space-x-2">
+              <div className="flex items-center text-sm text-gray-500">
+                <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
+                {t('transcription.liveLog')}
+              </div>
+              <button
+                onClick={scrollToBottom}
+                className="px-2 py-1 text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100"
+              >
+                {t('transcription.scrollToBottom')}
+              </button>
+            </div>
+          </div>
+          <div 
+            ref={logContainerRef}
+            className="bg-gray-50 p-4 rounded-md max-h-64 overflow-y-auto"
+            style={{ scrollBehavior: 'smooth' }}
+          >
+            <div ref={logContentRef} className="font-mono text-sm space-y-1">
               {state.logs.map((log, index) => (
-                <div key={index} className="text-gray-700">
+                <div key={index} className="text-gray-700 py-1 border-l-2 border-transparent hover:border-blue-300 hover:bg-blue-50 pl-2 -ml-2 transition-colors">
+                  <span className="text-gray-400 mr-2">{String(index + 1).padStart(3, '0')}:</span>
                   {log}
                 </div>
               ))}
